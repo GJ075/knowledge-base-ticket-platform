@@ -43,6 +43,28 @@ async def stream_deepseek(
             yield delta
 
 
+async def complete_deepseek(
+    messages: list[dict],
+    temperature: float = 0.0,
+    max_tokens: int = 512,
+    timeout: float = 60.0,
+) -> str:
+    client = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+        timeout=timeout,
+    )
+    response = await client.chat.completions.create(
+        model=settings.deepseek_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    if not response.choices:
+        return ""
+    return response.choices[0].message.content or ""
+
+
 async def stream_mock(
     citations: list[dict],
 ) -> AsyncGenerator[str, None]:

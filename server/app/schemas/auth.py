@@ -13,6 +13,7 @@ class UserOut(BaseModel):
     username: str
     display_name: str
     role: str
+    can_evaluate: bool = False
 
     model_config = {"from_attributes": True}
 

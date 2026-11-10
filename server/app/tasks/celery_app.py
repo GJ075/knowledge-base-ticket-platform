@@ -8,7 +8,7 @@ celery_app = Celery(
     "kb_ticket",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.ingestion"],
+    include=["app.tasks.ingestion", "app.tasks.evaluation"],
 )
 celery_app.conf.update(
     task_serializer="json",

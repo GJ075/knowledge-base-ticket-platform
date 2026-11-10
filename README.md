@@ -6,14 +6,15 @@
 
 | 项 | 内容 |
 |---|---|
-| 阶段 | 首版主体框架完成（Phase 0–4 已验收），Phase 5 交付文档 |
+| 阶段 | 首版主体框架完成（Phase 0–4 已验收），Phase 5 交付文档，评测系统首版已实现 |
 | 设计文档 | [docs/00-文档索引.md](docs/00-文档索引.md) |
 | 测试手册 | [docs/08-首版测试手册.md](docs/08-首版测试手册.md) |
 | 已知问题 | [docs/10-已知问题.md](docs/10-已知问题.md) |
 | 开发过程问题 | [docs/11-开发过程问题记录.md](docs/11-开发过程问题记录.md) |
+| 评测系统 | [docs/12-评测系统设计.md](docs/12-评测系统设计.md) |
 | 后续规划 | [docs/09-后续规划.md](docs/09-后续规划.md) |
 
-首版范围：RAG 问答与引用、文档上传/解析/索引/审批、员工与领导工单全状态流转、补录历史工单、附件、筛选、历史隔离。不包含：检索准确率调优、OCR、agent 辅助填单、审计、生产部署。
+首版范围：RAG 问答与引用、文档上传/解析/索引/审批、员工与领导工单全状态流转、补录历史工单、附件、筛选、历史隔离、RAG 回归评测。不包含：检索准确率调优、OCR、agent 辅助填单、审计、生产部署。
 
 ## 技术栈
 
@@ -171,6 +172,24 @@ docker compose exec api python -m scripts.seed
 | `MAX_UPLOAD_MB` | 50 | 单文件上限 |
 | `EMBEDDING_DEVICE` | `cpu` | 可改 `cuda`（需 GPU 镜像） |
 | `COOKIE_SECURE` | `false` | 本机 HTTP 保持 false；HTTPS 部署时改 true |
+
+## 评测系统
+
+- 入口：侧边栏「评测」，仅领导与被授权员工可见；领导可在评测首页给员工开关权限。
+- 支持数据集、用例、轮次维护，JSONL 导入导出，后台异步运行、进度和取消，汇总指标、逐轮结果、基线对比与 JSONL/CSV 导出。
+- 运行不写入问答会话，不污染真实历史；同一数据集同时只允许一个运行。
+
+生成初始草稿（需要配置 `DEEPSEEK_API_KEY`）：
+
+```bash
+docker compose exec api python -m scripts.generate_eval_drafts --single 30 --multi 10 --out /app/eval-drafts.jsonl
+```
+
+```bash
+docker compose cp api:/app/eval-drafts.jsonl ../eval-drafts.jsonl
+```
+
+草稿不会直接入库，审核后在评测页通过「导入 JSONL」导入。设计与指标定义见 [docs/12-评测系统设计.md](docs/12-评测系统设计.md)。
 
 ## 数据边界
 

@@ -77,6 +77,21 @@
 | 工单附件 | POST | `/tickets/{id}/attachments` | 处理人（仅 `returned`） |
 | 工单附件 | DELETE | `/tickets/{id}/attachments/{attachment_id}` | 处理人（仅 `returned`） |
 | 工单附件 | GET | `/tickets/{id}/attachments/{attachment_id}/download` | 可查看该工单的人 |
+| 评测 | GET/POST | `/eval/datasets` | 评测权限 |
+| 评测 | GET/PATCH/DELETE | `/eval/datasets/{id}` | 评测权限 |
+| 评测 | GET | `/eval/datasets/{id}/export` | 评测权限 |
+| 评测 | POST | `/eval/import` | 评测权限 |
+| 评测 | POST | `/eval/datasets/{id}/cases` | 评测权限 |
+| 评测 | PUT/PATCH/DELETE | `/eval/cases/{id}` | 评测权限 |
+| 评测 | POST | `/eval/cases/{id}/turns` | 评测权限 |
+| 评测 | PATCH/DELETE | `/eval/turns/{id}` | 评测权限 |
+| 评测 | POST | `/eval/datasets/{id}/runs` | 评测权限 |
+| 评测 | GET | `/eval/runs`、`/eval/runs/{id}` | 评测权限 |
+| 评测 | GET | `/eval/runs/{id}/items` | 评测权限 |
+| 评测 | POST | `/eval/runs/{id}/cancel` | 评测权限 |
+| 评测 | GET | `/eval/runs/{id}/compare` | 评测权限 |
+| 评测 | GET | `/eval/runs/{id}/export` | 评测权限 |
+| 评测权限 | GET/PATCH | `/eval/permissions`、`/eval/permissions/{user_id}` | 领导 |
 | 健康检查 | GET | `/health/live` | 公开 |
 | 健康检查 | GET | `/health/ready` | 公开 |
 
@@ -773,13 +788,88 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 }
 ```
 
-## 9. 健康检查
+## 9. 评测接口
 
-### 9.1 存活检查
+所有接口要求登录，且当前用户为领导或 `can_evaluate=true`；否则 `403 AUTH_FORBIDDEN`。成员权限接口仅领导可调用。
+
+### 9.1 认证响应扩展
+
+`/auth/me` 与登录响应增加 `can_evaluate`；领导默认拥有评测权限，前端按 `role === "leader" || can_evaluate` 显示入口。
+
+### 9.2 数据集
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/eval/datasets?include_archived=` | 数据集列表，含用例数、轮次数、最近运行 |
+| POST | `/eval/datasets` | 新建，body `{name, description}` |
+| GET | `/eval/datasets/{id}` | 详情，含用例与轮次 |
+| PATCH | `/eval/datasets/{id}` | 修改名称/描述 |
+| DELETE | `/eval/datasets/{id}` | 归档数据集 |
+| GET | `/eval/datasets/{id}/export` | 导出 JSONL |
+| POST | `/eval/import` | 上传 JSONL 文件导入新数据集 |
+
+JSONL 格式：
+
+```jsonl
+{"type":"dataset","name":"RAG 回归集 v1","description":"说明"}
+{"type":"case","title":"食堂开放时间","tags":["single_turn","answerable"],"turns":[{"question":"公司食堂开放时间是什么？","reference_answer":"11:30-13:00","expected_type":"answerable","required_document_titles":["员工手册"]}]}
+```
+
+导入规则：第一行必须是数据集元信息；`required_document_titles` 按标题精确匹配且必须唯一；可回答轮次必须有参考答案与必引文档；文件整体校验通过后才写入，失败时返回 `422` 与具体行号。
+
+### 9.3 用例与轮次
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/eval/datasets/{id}/cases` | 新增用例，body `{title, tags, turns}`，1–5 轮 |
+| PATCH | `/eval/cases/{id}` | 仅修改标题/标签 |
+| PUT | `/eval/cases/{id}` | 整体替换用例与轮次 |
+| DELETE | `/eval/cases/{id}` | 删除用例 |
+| POST | `/eval/cases/{id}/turns` | 追加一轮（最多 5 轮） |
+| PATCH | `/eval/turns/{id}` | 修改单轮，body 同轮次结构 |
+| DELETE | `/eval/turns/{id}` | 删除单轮并重排 `turn_index` |
+
+轮次结构：
+
+```json
+{
+  "question": "年假需要提前几天申请？",
+  "reference_answer": "提前 3 个工作日",
+  "expected_type": "answerable",
+  "required_document_ids": ["UUID"]
+}
+```
+
+`expected_type` 为 `answerable` 时必须提供参考答案和至少一个必引文档，否则 `422 EVAL_CASE_INVALID`。
+
+### 9.4 运行
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/eval/datasets/{id}/runs` | 启动运行，body `{retrieval_mode: "question"｜"rewritten"}`；同数据集已有运行中返回 `409 EVAL_RUN_IN_PROGRESS` |
+| GET | `/eval/runs?dataset_id=&limit=` | 运行列表 |
+| GET | `/eval/runs/{id}` | 运行详情与汇总指标 |
+| GET | `/eval/runs/{id}/items?status=&page=&page_size=` | 逐轮结果 |
+| POST | `/eval/runs/{id}/cancel` | 请求取消；非进行中返回 `409 EVAL_RUN_NOT_ACTIVE` |
+| GET | `/eval/runs/{id}/compare?baseline_id=` | 与基线对比：指标差值与新增失败/修复 |
+| GET | `/eval/runs/{id}/export?format=jsonl｜csv` | 导出逐轮结果 |
+
+运行详情主要字段：`status`、`progress`、`total_items`、`completed_items`、`metrics`、`error`。指标键见 [12-评测系统设计](12-评测系统设计.md) 第 7 节。
+
+### 9.5 成员权限
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/eval/permissions` | 员工与领导的评测权限列表 |
+| PATCH | `/eval/permissions/{user_id}` | body `{can_evaluate}`；领导不可被关闭（`422 EVAL_PERMISSION_INVALID`） |
+
+## 10. 健康检查
+
+### 10.1 存活检查
 
 `GET /health/live` → `200 {"status":"ok"}`。
 
-### 9.2 就绪检查
+### 10.2 就绪检查
 
 `GET /health/ready`
 
@@ -797,7 +887,7 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 
 任一组件异常时返回 `503`，`status` 为 `degraded`，并标明异常组件。
 
-## 10. 错误码
+## 11. 错误码
 
 | 错误码 | HTTP | 说明 |
 |---|---|---|
@@ -821,9 +911,18 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 | `CHAT_CONVERSATION_NOT_FOUND` | 404 | 会话不存在或不属于当前用户 |
 | `EMBEDDING_UNAVAILABLE` | 503 | embedding 服务不可用 |
 | `LLM_UNAVAILABLE` | 503 | 生成服务不可用 |
+| `EVAL_DATASET_EXISTS` | 409 | 数据集名称已存在 |
+| `EVAL_DATASET_EMPTY` | 422 | 数据集没有可运行用例 |
+| `EVAL_CASE_INVALID` | 422 | 用例或轮次不合法 |
+| `EVAL_IMPORT_ERROR` | 422 | JSONL 导入校验失败 |
+| `EVAL_RUN_IN_PROGRESS` | 409 | 该数据集已有运行中的评测 |
+| `EVAL_RUN_NOT_ACTIVE` | 409 | 运行已结束，无法取消 |
+| `EVAL_COMPARE_INVALID` | 422 | 只能对比同一数据集下的运行 |
+| `EVAL_PERMISSION_INVALID` | 422 | 不允许修改的评测权限 |
+| `DATABASE_ERROR` | 500 | 数据库操作失败 |
 | `INTERNAL_ERROR` | 500 | 未预期的服务端错误 |
 
-## 11. SSE 客户端约定
+## 12. SSE 客户端约定
 
 1. 使用 `fetch` + `ReadableStream`，因为 `EventSource` 不支持 POST。
 2. 请求头：`Accept: text/event-stream`，`Content-Type: application/json`。
@@ -832,9 +931,9 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 5. `error` 事件展示错误提示，并允许重试。
 6. 组件卸载时使用 `AbortController` 取消请求。
 
-## 12. OpenAPI
+## 13. OpenAPI
 
 - FastAPI 自动生成 `/docs` 与 `/openapi.json`。
-- 所有路由按模块打 tag：`auth`、`users`、`chat`、`documents`、`document-changes`、`tickets`、`health`。
+- 所有路由按模块打 tag：`auth`、`users`、`chat`、`documents`、`document-changes`、`tickets`、`eval`、`health`。
 - 所有受保护接口在 OpenAPI 中标注 Cookie 认证。
 - Pydantic 模型作为请求/响应 schema，避免手写重复定义。

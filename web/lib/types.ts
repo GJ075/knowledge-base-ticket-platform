@@ -5,6 +5,7 @@ export interface User {
   username: string;
   display_name: string;
   role: Role;
+  can_evaluate: boolean;
 }
 
 export interface UserBrief {
@@ -156,3 +157,154 @@ export interface TicketDetail extends TicketSummary {
 }
 
 export interface TicketListResponse extends Paginated<TicketSummary> {}
+
+export type EvalExpectedType = "answerable" | "unanswerable";
+export type EvalRetrievalMode = "question" | "rewritten";
+export type EvalRunStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+export type EvalItemStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "invalid"
+  | "error"
+  | "cancelled";
+
+export interface EvalDocumentRef {
+  id: string;
+  title: string;
+}
+
+export interface EvalTurn {
+  id: string;
+  turn_index: number;
+  question: string;
+  reference_answer: string | null;
+  expected_type: EvalExpectedType;
+  required_document_ids: string[];
+  required_documents: EvalDocumentRef[];
+}
+
+export interface EvalCase {
+  id: string;
+  title: string;
+  tags: string[];
+  sort_order: number;
+  turns: EvalTurn[];
+}
+
+export interface EvalRunSummary {
+  id: string;
+  status: EvalRunStatus;
+  retrieval_mode: EvalRetrievalMode;
+  total_items: number;
+  completed_items: number;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface EvalDataset {
+  id: string;
+  name: string;
+  description: string | null;
+  is_archived: boolean;
+  case_count: number;
+  turn_count: number;
+  created_at: string;
+  updated_at: string;
+  last_run: EvalRunSummary | null;
+}
+
+export interface EvalDatasetDetail extends EvalDataset {
+  cases: EvalCase[];
+}
+
+export interface EvalRun {
+  id: string;
+  dataset_id: string;
+  dataset_name: string;
+  retrieval_mode: EvalRetrievalMode;
+  status: EvalRunStatus;
+  baseline_run_id: string | null;
+  total_items: number;
+  completed_items: number;
+  metrics: Record<string, number | null> | null;
+  error: string | null;
+  created_by: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  progress: number;
+}
+
+export interface EvalRetrieved {
+  document_id: string;
+  document_title: string;
+  chunk_index: number;
+  snippet: string;
+}
+
+export interface EvalRunItem {
+  id: number;
+  case_id: string;
+  case_title: string;
+  turn_index: number;
+  question: string;
+  reference_answer: string | null;
+  expected_type: EvalExpectedType;
+  required_document_ids: string[];
+  status: EvalItemStatus;
+  retrieval_query: string | null;
+  retrieved: EvalRetrieved[] | null;
+  citations: EvalRetrieved[] | null;
+  answer: string | null;
+  judge_score: number | null;
+  judge_passed: boolean | null;
+  refused: boolean | null;
+  judge_reason: string | null;
+  retrieval_hit: boolean | null;
+  retrieval_recall: number | null;
+  retrieval_rank: number | null;
+  citation_hit: boolean | null;
+  citation_precision: number | null;
+  passed: boolean | null;
+  invalid_reason: string | null;
+  error: string | null;
+  latency_ms: number | null;
+}
+
+export interface EvalCompare {
+  current: EvalRun;
+  baseline: EvalRun;
+  metric_delta: Record<string, number>;
+  case_changes: {
+    newly_failed: { case_id: string; case_title: string; turn_index: number; status: string }[];
+    newly_passed: { case_id: string; case_title: string; turn_index: number; status: string }[];
+  };
+}
+
+export interface EvalPermission {
+  id: string;
+  username: string;
+  display_name: string;
+  role: Role;
+  can_evaluate: boolean;
+}
+
+export interface EvalTurnInput {
+  question: string;
+  reference_answer: string | null;
+  expected_type: EvalExpectedType;
+  required_document_ids: string[];
+}
+
+export interface EvalCaseInput {
+  title: string;
+  tags: string[];
+  turns: EvalTurnInput[];
+}

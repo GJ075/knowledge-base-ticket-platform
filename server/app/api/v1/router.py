@@ -6,6 +6,7 @@ from app.api.v1 import (
     conversations,
     document_changes,
     documents,
+    eval,
     tickets,
     users,
 )
@@ -18,3 +19,4 @@ api_router.include_router(document_changes.router)
 api_router.include_router(chat.router)
 api_router.include_router(conversations.router)
 api_router.include_router(tickets.router)
+api_router.include_router(eval.router)

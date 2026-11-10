@@ -9,7 +9,12 @@ import type { Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Spinner } from "./ui";
 
-const NAV: { href: string; label: string; roles: Role[] }[] = [
+const NAV: {
+  href: string;
+  label: string;
+  roles: Role[];
+  needsEval?: boolean;
+}[] = [
   { href: "/chat", label: "问答", roles: ["employee", "leader"] },
   { href: "/history", label: "我的历史", roles: ["employee", "leader"] },
   { href: "/documents", label: "文档", roles: ["employee", "leader"] },
@@ -20,6 +25,12 @@ const NAV: { href: string; label: string; roles: Role[] }[] = [
   },
   { href: "/tickets", label: "工单", roles: ["employee", "leader"] },
   { href: "/tickets/new", label: "新建工单", roles: ["employee", "leader"] },
+  {
+    href: "/evaluations",
+    label: "评测",
+    roles: ["employee", "leader"],
+    needsEval: true,
+  },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -52,7 +63,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </p>
         </div>
         <nav className="space-y-1 p-3">
-          {NAV.filter((item) => item.roles.includes(user.role)).map((item) => (
+          {NAV.filter(
+            (item) =>
+              item.roles.includes(user.role) &&
+              (!item.needsEval ||
+                user.role === "leader" ||
+                user.can_evaluate),
+          ).map((item) => (
             <Link
               key={item.href}
               href={item.href}

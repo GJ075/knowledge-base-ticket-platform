@@ -43,3 +43,9 @@ async def require_leader(user: User = Depends(get_current_user)) -> User:
     if user.role != "leader":
         raise AppError("AUTH_FORBIDDEN", "需要领导权限", 403)
     return user
+
+
+async def require_evaluator(user: User = Depends(get_current_user)) -> User:
+    if user.role != "leader" and not user.can_evaluate:
+        raise AppError("AUTH_FORBIDDEN", "没有评测权限", 403)
+    return user

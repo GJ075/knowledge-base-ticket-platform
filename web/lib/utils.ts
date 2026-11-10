@@ -96,3 +96,50 @@ export const TICKET_ACTION_LABEL: Record<string, string> = {
   add_attachment: "添加附件",
   delete_attachment: "删除附件",
 };
+
+export const EVAL_RUN_STATUS_LABEL: Record<string, string> = {
+  pending: "排队中",
+  running: "运行中",
+  succeeded: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+export const EVAL_ITEM_STATUS_LABEL: Record<string, string> = {
+  pending: "等待",
+  running: "运行中",
+  passed: "通过",
+  failed: "未通过",
+  invalid: "失效",
+  error: "出错",
+  cancelled: "已取消",
+};
+
+export const EVAL_MODE_LABEL: Record<string, string> = {
+  question: "当前问题检索",
+  rewritten: "历史改写检索",
+};
+
+export const EVAL_METRIC_LABEL: Record<string, string> = {
+  pass_rate: "轮次通过率",
+  answerable_pass_rate: "可回答通过率",
+  answerable_avg_score: "平均回答分",
+  answerable_retrieval_hit_rate: "检索命中率",
+  answerable_mrr: "MRR",
+  answerable_avg_recall: "平均召回率",
+  answerable_citation_hit_rate: "引用命中率",
+  answerable_avg_citation_precision: "引用精确率",
+  answerable_refused_rate: "误拒率",
+  unanswerable_refusal_rate: "拒答正确率",
+  case_pass_rate: "用例通过率",
+  avg_latency_ms: "平均耗时(ms)",
+  invalid_items: "失效轮次",
+  error_items: "错误轮次",
+};
+
+export function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${(value * 100).toFixed(1)}%`;
+}
