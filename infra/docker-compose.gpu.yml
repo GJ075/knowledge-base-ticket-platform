@@ -1,0 +1,8 @@
+services:
+  embedding:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    environment:
+      EMBEDDING_DEVICE: cuda
+    gpus: all
