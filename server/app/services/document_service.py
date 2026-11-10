@@ -12,11 +12,17 @@ from app.core.errors import AppError
 from app.models.document import Document, DocumentChange, DocumentChunk
 from app.models.user import User
 from app.schemas.document import (
+    BatchDeleteResponse,
+    BatchIdsResponse,
+    BatchItem,
     DocumentActionResponse,
     DocumentChangeListResponse,
     DocumentChangeOut,
     DocumentListResponse,
     DocumentOut,
+    SkippedItem,
+    TrashDocumentOut,
+    TrashListResponse,
 )
 from app.schemas.user import UserBrief
 from app.services.document_parser import validate_upload
@@ -111,6 +117,11 @@ async def _pending_change_id(
             )
         )
     ).scalar_one_or_none()
+
+
+def _move_to_trash(document: Document) -> None:
+    document.is_deleted = True
+    document.deleted_at = datetime.now(timezone.utc)
 
 
 async def _load_document(
@@ -391,22 +402,8 @@ async def delete_document(
                 "该文档已有待审批变更",
                 409,
             )
-        object_key = document.object_key
-        await db.execute(
-            delete(DocumentChunk).where(
-                DocumentChunk.document_id == document.id
-            )
-        )
-        document.is_deleted = True
+        _move_to_trash(document)
         await db.commit()
-        try:
-            await remove_object_async(BUCKET, object_key)
-        except Exception:
-            logger.warning(
-                "failed to remove document object %s",
-                object_key,
-                exc_info=True,
-            )
         return DocumentActionResponse(mode="direct")
 
     if await _pending_change_id(db, document.id):
@@ -537,7 +534,6 @@ async def approve_change(
     index_document_id: uuid.UUID | None = None
     response_document_id: uuid.UUID | None = None
     old_object_key: str | None = None
-    delete_object_key: str | None = None
 
     if change.action == "create":
         if not change.title or not change.object_key:
@@ -580,13 +576,7 @@ async def approve_change(
         if not change.document_id:
             raise AppError("VALIDATION_ERROR", "变更缺少目标文档", 422)
         document = await _load_document(db, change.document_id)
-        delete_object_key = document.object_key
-        await db.execute(
-            delete(DocumentChunk).where(
-                DocumentChunk.document_id == document.id
-            )
-        )
-        document.is_deleted = True
+        _move_to_trash(document)
     else:
         raise AppError("VALIDATION_ERROR", "未知的变更类型", 422)
 
@@ -596,16 +586,6 @@ async def approve_change(
     change.reviewed_at = datetime.now(timezone.utc)
     change.review_comment = comment
     await db.commit()
-
-    if delete_object_key:
-        try:
-            await remove_object_async(BUCKET, delete_object_key)
-        except Exception:
-            logger.warning(
-                "failed to remove document object %s",
-                delete_object_key,
-                exc_info=True,
-            )
 
     if index_document_id:
         celery_app.send_task(
@@ -654,3 +634,262 @@ async def reject_change(
     return DocumentActionResponse(
         mode="direct", change=change_to_out(change)
     )
+
+
+async def batch_delete(
+    db: AsyncSession,
+    user: User,
+    ids: list[uuid.UUID],
+) -> BatchDeleteResponse:
+    ids = list(dict.fromkeys(ids))
+    documents = (
+        await db.execute(select(Document).where(Document.id.in_(ids)))
+    ).scalars().all()
+    by_id = {document.id: document for document in documents}
+    deleted: list[BatchItem] = []
+    submitted: list[BatchItem] = []
+    skipped: list[SkippedItem] = []
+
+    for document_id in ids:
+        document = by_id.get(document_id)
+        if not document:
+            skipped.append(
+                SkippedItem(id=document_id, reason="文档不存在")
+            )
+            continue
+        if document.is_deleted:
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="文档已在回收站",
+                )
+            )
+            continue
+        if await _pending_change_id(db, document_id):
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="该文档已有待审批变更",
+                )
+            )
+            continue
+        if user.role == "leader":
+            _move_to_trash(document)
+            deleted.append(
+                BatchItem(id=document.id, title=document.title)
+            )
+        else:
+            db.add(
+                DocumentChange(
+                    action="delete",
+                    status="pending",
+                    document_id=document.id,
+                    title=document.title,
+                    requested_by=user.id,
+                )
+            )
+            submitted.append(
+                BatchItem(id=document.id, title=document.title)
+            )
+
+    await db.commit()
+    return BatchDeleteResponse(
+        mode="direct" if user.role == "leader" else "pending_approval",
+        deleted=deleted,
+        submitted=submitted,
+        skipped=skipped,
+    )
+
+
+async def list_trash(
+    db: AsyncSession,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> TrashListResponse:
+    page, page_size, offset = _page(page, page_size)
+    filters = [
+        Document.is_deleted.is_(True),
+        Document.purged_at.is_(None),
+    ]
+    if keyword:
+        pattern = f"%{keyword}%"
+        filters.append(
+            or_(
+                Document.title.ilike(pattern),
+                Document.filename.ilike(pattern),
+            )
+        )
+    count_query = select(func.count()).select_from(Document).where(*filters)
+    query = (
+        select(Document)
+        .options(selectinload(Document.uploader))
+        .where(*filters)
+        .order_by(Document.deleted_at.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    total = (await db.execute(count_query)).scalar_one()
+    documents = (await db.execute(query)).scalars().all()
+    return TrashListResponse(
+        items=[
+            TrashDocumentOut(
+                **document_to_out(document).model_dump(),
+                deleted_at=document.deleted_at,
+            )
+            for document in documents
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+async def restore_documents(
+    db: AsyncSession, ids: list[uuid.UUID]
+) -> BatchIdsResponse:
+    ids = list(dict.fromkeys(ids))
+    documents = (
+        await db.execute(select(Document).where(Document.id.in_(ids)))
+    ).scalars().all()
+    by_id = {document.id: document for document in documents}
+    processed: list[BatchItem] = []
+    skipped: list[SkippedItem] = []
+
+    for document_id in ids:
+        document = by_id.get(document_id)
+        if not document:
+            skipped.append(
+                SkippedItem(id=document_id, reason="文档不存在")
+            )
+            continue
+        if not document.is_deleted:
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="文档不在回收站",
+                )
+            )
+            continue
+        if document.purged_at:
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="文档已彻底删除",
+                )
+            )
+            continue
+        if await _pending_change_id(db, document_id):
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="该文档已有待审批变更",
+                )
+            )
+            continue
+        document.is_deleted = False
+        document.deleted_at = None
+        processed.append(
+            BatchItem(id=document.id, title=document.title)
+        )
+
+    await db.commit()
+    return BatchIdsResponse(processed=processed, skipped=skipped)
+
+
+async def purge_documents(
+    db: AsyncSession, ids: list[uuid.UUID]
+) -> BatchIdsResponse:
+    ids = list(dict.fromkeys(ids))
+    documents = (
+        await db.execute(select(Document).where(Document.id.in_(ids)))
+    ).scalars().all()
+    by_id = {document.id: document for document in documents}
+    processed: list[BatchItem] = []
+    skipped: list[SkippedItem] = []
+    object_keys: list[str] = []
+
+    for document_id in ids:
+        document = by_id.get(document_id)
+        if not document:
+            skipped.append(
+                SkippedItem(id=document_id, reason="文档不存在")
+            )
+            continue
+        if not document.is_deleted or document.purged_at:
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="文档不在回收站",
+                )
+            )
+            continue
+        if await _pending_change_id(db, document_id):
+            skipped.append(
+                SkippedItem(
+                    id=document_id,
+                    title=document.title,
+                    reason="该文档已有待审批变更",
+                )
+            )
+            continue
+        await db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document.id
+            )
+        )
+        document.purged_at = datetime.now(timezone.utc)
+        object_keys.append(document.object_key)
+        processed.append(
+            BatchItem(id=document.id, title=document.title)
+        )
+
+    await db.commit()
+
+    for object_key in object_keys:
+        try:
+            await remove_object_async(BUCKET, object_key)
+        except Exception:
+            logger.warning(
+                "failed to remove document object %s",
+                object_key,
+                exc_info=True,
+            )
+    return BatchIdsResponse(processed=processed, skipped=skipped)
+
+
+async def batch_review(
+    db: AsyncSession,
+    reviewer: User,
+    ids: list[uuid.UUID],
+    comment: str | None,
+    approve: bool,
+) -> BatchIdsResponse:
+    processed: list[BatchItem] = []
+    skipped: list[SkippedItem] = []
+    for change_id in list(dict.fromkeys(ids)):
+        change = await db.get(DocumentChange, change_id)
+        title = (
+            change.document.title
+            if change and change.document
+            else (change.title if change else None)
+        )
+        try:
+            if approve:
+                await approve_change(db, reviewer, change_id, comment)
+            else:
+                await reject_change(
+                    db, reviewer, change_id, comment or ""
+                )
+            processed.append(BatchItem(id=change_id, title=title or "变更"))
+        except AppError as exc:
+            skipped.append(
+                SkippedItem(id=change_id, title=title, reason=exc.message)
+            )
+    return BatchIdsResponse(processed=processed, skipped=skipped)

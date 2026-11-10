@@ -13,14 +13,18 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_leader
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.document import (
+    BatchDeleteResponse,
+    BatchIdsRequest,
+    BatchIdsResponse,
     DocumentActionResponse,
     DocumentListResponse,
     DocumentOut,
     DownloadResponse,
+    TrashListResponse,
 )
 from app.services import document_service
 from app.services.storage import get_bytes_async
@@ -60,6 +64,50 @@ async def create_document(
     )
     response.status_code = 201 if result.mode == "direct" else 202
     return result
+
+
+@router.post(
+    "/batch-delete", response_model=BatchDeleteResponse
+)
+async def batch_delete(
+    payload: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> BatchDeleteResponse:
+    return await document_service.batch_delete(db, user, payload.ids)
+
+
+@router.get("/trash", response_model=TrashListResponse)
+async def list_trash(
+    keyword: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_leader),
+) -> TrashListResponse:
+    return await document_service.list_trash(
+        db, keyword, page, page_size
+    )
+
+
+@router.post(
+    "/trash/restore", response_model=BatchIdsResponse
+)
+async def restore_documents(
+    payload: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_leader),
+) -> BatchIdsResponse:
+    return await document_service.restore_documents(db, payload.ids)
+
+
+@router.post("/trash/purge", response_model=BatchIdsResponse)
+async def purge_documents(
+    payload: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_leader),
+) -> BatchIdsResponse:
+    return await document_service.purge_documents(db, payload.ids)
 
 
 @router.get("/{document_id}", response_model=DocumentOut)

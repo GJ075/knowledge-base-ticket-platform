@@ -66,3 +66,51 @@ class RejectRequest(BaseModel):
 class DownloadResponse(BaseModel):
     download_url: str
     expires_in: int
+
+
+class BatchIdsRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+
+
+class BatchItem(BaseModel):
+    id: uuid.UUID
+    title: str
+
+
+class SkippedItem(BaseModel):
+    id: uuid.UUID
+    title: str | None = None
+    reason: str
+
+
+class BatchDeleteResponse(BaseModel):
+    mode: str
+    deleted: list[BatchItem] = Field(default_factory=list)
+    submitted: list[BatchItem] = Field(default_factory=list)
+    skipped: list[SkippedItem] = Field(default_factory=list)
+
+
+class BatchIdsResponse(BaseModel):
+    processed: list[BatchItem] = Field(default_factory=list)
+    skipped: list[SkippedItem] = Field(default_factory=list)
+
+
+class BatchReviewRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class BatchRejectRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    comment: str = Field(min_length=1, max_length=2000)
+
+
+class TrashDocumentOut(DocumentOut):
+    deleted_at: datetime
+
+
+class TrashListResponse(BaseModel):
+    items: list[TrashDocumentOut]
+    total: int
+    page: int
+    page_size: int

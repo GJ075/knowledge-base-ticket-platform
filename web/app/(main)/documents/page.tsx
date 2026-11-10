@@ -1,11 +1,8 @@
 "use client";
 
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { FormEvent, useEffect, useState } from "react";
 
 import { Pagination } from "@/components/pagination";
 import { IndexStatusBadge } from "@/components/status-badge";
@@ -23,6 +20,7 @@ import {
 import { apiFetch, apiUpload } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type {
+  BatchDeleteResult,
   DocumentActionResult,
   DocumentItem,
   DownloadResult,
@@ -46,6 +44,15 @@ export default function DocumentsPage() {
   const [editing, setEditing] = useState<DocumentItem | null>(null);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchResult, setBatchResult] = useState<BatchDeleteResult | null>(
+    null,
+  );
+
+  useEffect(() => {
+    setSelected(new Set());
+    setBatchResult(null);
+  }, [search, page]);
 
   const isLeader = user?.role === "leader";
 
@@ -147,6 +154,21 @@ export default function DocumentsPage() {
       setError(err instanceof Error ? err.message : "删除失败"),
   });
 
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<BatchDeleteResult>("/documents/batch-delete", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: (result) => {
+      setBatchResult(result);
+      setSelected(new Set());
+      refresh();
+    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "批量删除失败"),
+  });
+
   const reindexMutation = useMutation({
     mutationFn: (document: DocumentItem) =>
       apiFetch<DocumentActionResult>(
@@ -196,13 +218,52 @@ export default function DocumentsPage() {
   }
 
   const items = documentsQuery.data?.items ?? [];
+  const allSelected =
+    items.length > 0 && items.every((item) => selected.has(item.id));
+
+  const toggleAll = () => {
+    setSelected(
+      allSelected ? new Set() : new Set(items.map((item) => item.id)),
+    );
+  };
+
+  const toggleOne = (documentId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(documentId)) {
+        next.delete(documentId);
+      } else {
+        next.add(documentId);
+      }
+      return next;
+    });
+  };
 
   return (
     <div>
       <PageHeader
         title="文档"
         description="上传、搜索、下载企业文档；员工变更需领导审批。"
-        action={<Button onClick={openUpload}>上传文档</Button>}
+        action={
+          <div className="flex items-center gap-2">
+            {selected.size > 0 ? (
+              <ButtonSecondary
+                className="border-red-200 text-red-600"
+                disabled={batchDeleteMutation.isPending}
+                onClick={() => {
+                  setError("");
+                  setNotice("");
+                  batchDeleteMutation.mutate(Array.from(selected));
+                }}
+              >
+                {batchDeleteMutation.isPending
+                  ? "删除中..."
+                  : `批量删除（${selected.size}）`}
+              </ButtonSecondary>
+            ) : null}
+            <Button onClick={openUpload}>上传文档</Button>
+          </div>
+        }
       />
 
       {notice ? (
@@ -213,6 +274,47 @@ export default function DocumentsPage() {
       {error ? (
         <div className="mb-4">
           <ErrorState message={error} />
+        </div>
+      ) : null}
+
+      {batchResult ? (
+        <div className="mb-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>
+              {batchResult.mode === "direct"
+                ? `已移入回收站 ${batchResult.deleted.length} 篇`
+                : `已提交删除申请 ${batchResult.submitted.length} 条`}
+              {batchResult.skipped.length > 0
+                ? `，跳过 ${batchResult.skipped.length} 篇`
+                : ""}
+            </span>
+            {isLeader && batchResult.deleted.length > 0 ? (
+              <Link
+                href="/documents/trash"
+                className="underline"
+              >
+                去回收站
+              </Link>
+            ) : null}
+            <button
+              className="ml-auto text-green-700 hover:underline"
+              onClick={() => setBatchResult(null)}
+            >
+              关闭
+            </button>
+          </div>
+          {batchResult.skipped.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-xs text-green-700">
+              {batchResult.skipped.slice(0, 5).map((item) => (
+                <li key={item.id}>
+                  {item.title ?? item.id}：{item.reason}
+                </li>
+              ))}
+              {batchResult.skipped.length > 5 ? (
+                <li>等 {batchResult.skipped.length} 篇</li>
+              ) : null}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
@@ -253,6 +355,15 @@ export default function DocumentsPage() {
               <table className="w-full min-w-[860px] text-left text-sm">
                 <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
+                    <th className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        aria-label="全选当前页"
+                        name="select-all-documents"
+                      />
+                    </th>
                     <th className="px-4 py-3">标题</th>
                     <th className="px-4 py-3">大小</th>
                     <th className="px-4 py-3">索引状态</th>
@@ -267,6 +378,15 @@ export default function DocumentsPage() {
                       key={document.id}
                       className="border-b border-slate-100 last:border-0"
                     >
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(document.id)}
+                          onChange={() => toggleOne(document.id)}
+                          aria-label={`选择 ${document.title}`}
+                          name={`select-${document.id}`}
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-900">
                           {document.title}
@@ -306,7 +426,7 @@ export default function DocumentsPage() {
                             onClick={() => {
                               if (
                                 window.confirm(
-                                  `确定删除《${document.title}》吗？`,
+                                  `确定将《${document.title}》移入回收站吗？`,
                                 )
                               ) {
                                 deleteMutation.mutate(document);

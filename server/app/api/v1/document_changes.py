@@ -7,6 +7,9 @@ from app.core.deps import get_current_user, require_leader
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.document import (
+    BatchIdsResponse,
+    BatchRejectRequest,
+    BatchReviewRequest,
     DocumentActionResponse,
     DocumentChangeListResponse,
     DocumentChangeOut,
@@ -28,6 +31,30 @@ async def list_changes(
 ) -> DocumentChangeListResponse:
     return await document_service.list_changes(
         db, user, status, page, page_size
+    )
+
+
+@router.post(
+    "/batch-approve", response_model=BatchIdsResponse
+)
+async def batch_approve(
+    payload: BatchReviewRequest,
+    db: AsyncSession = Depends(get_db),
+    reviewer: User = Depends(require_leader),
+) -> BatchIdsResponse:
+    return await document_service.batch_review(
+        db, reviewer, payload.ids, payload.comment, approve=True
+    )
+
+
+@router.post("/batch-reject", response_model=BatchIdsResponse)
+async def batch_reject(
+    payload: BatchRejectRequest,
+    db: AsyncSession = Depends(get_db),
+    reviewer: User = Depends(require_leader),
+) -> BatchIdsResponse:
+    return await document_service.batch_review(
+        db, reviewer, payload.ids, payload.comment, approve=False
     )
 
 

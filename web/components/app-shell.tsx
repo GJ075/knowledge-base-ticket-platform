@@ -19,6 +19,11 @@ const NAV: {
   { href: "/history", label: "我的历史", roles: ["employee", "leader"] },
   { href: "/documents", label: "文档", roles: ["employee", "leader"] },
   {
+    href: "/documents/trash",
+    label: "回收站",
+    roles: ["leader"],
+  },
+  {
     href: "/documents/approvals",
     label: "文档审批",
     roles: ["leader"],

@@ -65,6 +65,33 @@ export interface DownloadResult {
   expires_in: number;
 }
 
+export interface TrashDocument extends DocumentItem {
+  deleted_at: string;
+}
+
+export interface BatchItem {
+  id: string;
+  title: string;
+}
+
+export interface SkippedItem {
+  id: string;
+  title?: string | null;
+  reason: string;
+}
+
+export interface BatchDeleteResult {
+  mode: "direct" | "pending_approval";
+  deleted: BatchItem[];
+  submitted: BatchItem[];
+  skipped: SkippedItem[];
+}
+
+export interface BatchResult {
+  processed: BatchItem[];
+  skipped: SkippedItem[];
+}
+
 export interface Citation {
   document_id: string;
   document_title: string;

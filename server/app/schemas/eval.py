@@ -90,6 +90,7 @@ class DatasetDetail(DatasetSummary):
 
 class RunCreate(BaseModel):
     retrieval_mode: Literal["question", "rewritten"] = "question"
+    case_ids: list[uuid.UUID] | None = None
 
 
 class RunOut(BaseModel):

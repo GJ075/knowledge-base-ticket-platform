@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Pagination } from "@/components/pagination";
 import {
@@ -26,6 +26,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type {
+  BatchResult,
   DocumentActionResult,
   DocumentChange,
   DocumentChangeStatus,
@@ -54,6 +55,15 @@ export default function DocumentApprovalsPage() {
     "approve",
   );
   const [comment, setComment] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchDecision, setBatchDecision] = useState<
+    "approve" | "reject" | null
+  >(null);
+  const [batchComment, setBatchComment] = useState("");
+
+  useEffect(() => {
+    setSelected(new Set());
+  }, [tab, page]);
 
   const changesQuery = useQuery({
     queryKey: ["document-changes", tab, page],
@@ -95,6 +105,46 @@ export default function DocumentApprovalsPage() {
       setError(err instanceof Error ? err.message : "审批失败"),
   });
 
+  const batchMutation = useMutation({
+    mutationFn: async () => {
+      if (!batchDecision) {
+        throw new Error("没有选择操作");
+      }
+      if (batchDecision === "reject" && !batchComment.trim()) {
+        throw new Error("驳回必须填写原因");
+      }
+      return apiFetch<BatchResult>(
+        `/document-changes/batch-${batchDecision}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ids: Array.from(selected),
+            comment: batchComment.trim() || undefined,
+          }),
+        },
+      );
+    },
+    onSuccess: (result) => {
+      setNotice(
+        `已处理 ${result.processed.length} 条` +
+          (result.skipped.length > 0
+            ? `，跳过 ${result.skipped.length} 条：${result.skipped
+                .map((item) => item.reason)
+                .join("；")}`
+            : ""),
+      );
+      setBatchDecision(null);
+      setBatchComment("");
+      setSelected(new Set());
+      void queryClient.invalidateQueries({
+        queryKey: ["document-changes"],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "批量审批失败"),
+  });
+
   function openReview(
     change: DocumentChange,
     nextDecision: "approve" | "reject",
@@ -116,12 +166,59 @@ export default function DocumentApprovalsPage() {
   }
 
   const items = changesQuery.data?.items ?? [];
+  const pendingItems = items.filter((item) => item.status === "pending");
+  const allSelected =
+    pendingItems.length > 0 &&
+    pendingItems.every((item) => selected.has(item.id));
+
+  const toggleAll = () => {
+    setSelected(
+      allSelected
+        ? new Set()
+        : new Set(pendingItems.map((item) => item.id)),
+    );
+  };
+
+  const toggleOne = (changeId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(changeId)) {
+        next.delete(changeId);
+      } else {
+        next.add(changeId);
+      }
+      return next;
+    });
+  };
 
   return (
     <div>
       <PageHeader
         title="文档审批"
         description="审批员工提交的文档新增、修改和删除。"
+        action={
+          selected.size > 0 ? (
+            <div className="flex items-center gap-2">
+              <ButtonSecondary
+                onClick={() => {
+                  setBatchComment("");
+                  setBatchDecision("approve");
+                }}
+              >
+                批量通过（{selected.size}）
+              </ButtonSecondary>
+              <ButtonSecondary
+                className="border-red-200 text-red-600"
+                onClick={() => {
+                  setBatchComment("");
+                  setBatchDecision("reject");
+                }}
+              >
+                批量驳回（{selected.size}）
+              </ButtonSecondary>
+            </div>
+          ) : null
+        }
       />
 
       {notice ? (
@@ -180,6 +277,15 @@ export default function DocumentApprovalsPage() {
               <table className="w-full min-w-[820px] text-left text-sm">
                 <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
+                    <th className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        aria-label="全选当前页"
+                        name="select-all-changes"
+                      />
+                    </th>
                     <th className="px-4 py-3">动作</th>
                     <th className="px-4 py-3">文档</th>
                     <th className="px-4 py-3">申请人</th>
@@ -194,6 +300,17 @@ export default function DocumentApprovalsPage() {
                       key={change.id}
                       className="border-b border-slate-100 last:border-0"
                     >
+                      <td className="px-4 py-3">
+                        {change.status === "pending" ? (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(change.id)}
+                            onChange={() => toggleOne(change.id)}
+                            aria-label={`选择变更 ${change.document_title ?? change.id}`}
+                            name={`select-change-${change.id}`}
+                          />
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3">
                         <DocumentActionBadge action={change.action} />
                       </td>
@@ -274,6 +391,7 @@ export default function DocumentApprovalsPage() {
           </p>
           <Textarea
             rows={4}
+            name="review_comment"
             placeholder={
               decision === "reject"
                 ? "驳回原因（必填）"
@@ -297,6 +415,44 @@ export default function DocumentApprovalsPage() {
               onClick={() => reviewMutation.mutate()}
             >
               {reviewMutation.isPending ? "提交中..." : "确认"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(batchDecision)}
+        title={batchDecision === "reject" ? "批量驳回" : "批量通过"}
+        onClose={() => setBatchDecision(null)}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            将处理 {selected.size} 条待审批变更。
+          </p>
+          <Textarea
+            rows={4}
+            name="batch_comment"
+            placeholder={
+              batchDecision === "reject"
+                ? "驳回原因（必填）"
+                : "审批意见（可选）"
+            }
+            value={batchComment}
+            onChange={(event) => setBatchComment(event.target.value)}
+          />
+          {error ? <ErrorState message={error} /> : null}
+          <div className="flex justify-end gap-2">
+            <ButtonSecondary onClick={() => setBatchDecision(null)}>
+              取消
+            </ButtonSecondary>
+            <Button
+              disabled={
+                batchMutation.isPending ||
+                (batchDecision === "reject" && !batchComment.trim())
+              }
+              onClick={() => batchMutation.mutate()}
+            >
+              {batchMutation.isPending ? "提交中..." : "确认"}
             </Button>
           </div>
         </div>

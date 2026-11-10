@@ -52,7 +52,9 @@ async def _validate_turn_documents(
     db: AsyncSession, payload: TurnIn
 ) -> list[str]:
     _validate_turn_shape(payload)
-    ids = [str(item) for item in payload.required_document_ids]
+    ids = list(
+        dict.fromkeys(str(item) for item in payload.required_document_ids)
+    )
     if not ids:
         return []
     documents = (
@@ -75,27 +77,28 @@ async def _validate_turn_documents(
 
 
 def _case_out(case: EvalCase, titles: dict[str, str]) -> CaseOut:
+    def turn_out(turn: EvalTurn) -> TurnOut:
+        doc_ids = list(dict.fromkeys(turn.required_document_ids or []))
+        return TurnOut(
+            id=turn.id,
+            turn_index=turn.turn_index,
+            question=turn.question,
+            reference_answer=turn.reference_answer,
+            expected_type=turn.expected_type,
+            required_document_ids=doc_ids,
+            required_documents=[
+                DocumentRef(id=uuid.UUID(doc_id), title=titles[doc_id])
+                for doc_id in doc_ids
+                if doc_id in titles
+            ],
+        )
+
     return CaseOut(
         id=case.id,
         title=case.title,
         tags=case.tags or [],
         sort_order=case.sort_order,
-        turns=[
-            TurnOut(
-                id=turn.id,
-                turn_index=turn.turn_index,
-                question=turn.question,
-                reference_answer=turn.reference_answer,
-                expected_type=turn.expected_type,
-                required_document_ids=turn.required_document_ids or [],
-                required_documents=[
-                    DocumentRef(id=uuid.UUID(doc_id), title=titles[doc_id])
-                    for doc_id in (turn.required_document_ids or [])
-                    if doc_id in titles
-                ],
-            )
-            for turn in case.turns
-        ],
+        turns=[turn_out(turn) for turn in case.turns],
     )
 
 
@@ -480,7 +483,7 @@ async def _resolve_titles(
                 422,
             )
         resolved.append(str(matches[0].id))
-    return resolved
+    return list(dict.fromkeys(resolved))
 
 
 async def import_jsonl(
@@ -682,6 +685,7 @@ async def create_run(
     user: User,
     dataset_id: uuid.UUID,
     retrieval_mode: str,
+    case_ids: list[uuid.UUID] | None = None,
 ) -> RunOut:
     dataset = await _get_dataset(db, dataset_id)
     running = (
@@ -704,6 +708,20 @@ async def create_run(
             .order_by(EvalCase.sort_order, EvalCase.created_at)
         )
     ).scalars().all()
+    if case_ids is not None:
+        if not case_ids:
+            raise AppError(
+                "EVAL_CASE_INVALID", "请至少选择一个用例", 422
+            )
+        wanted = {str(case_id) for case_id in case_ids}
+        known = {str(case.id) for case in cases}
+        if wanted - known:
+            raise AppError(
+                "EVAL_CASE_INVALID",
+                "存在不属于该数据集的用例",
+                422,
+            )
+        cases = [case for case in cases if str(case.id) in wanted]
     items: list[EvalRunItem] = []
     for case in cases:
         for turn in case.turns:

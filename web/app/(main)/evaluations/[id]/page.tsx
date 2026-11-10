@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Badge,
@@ -65,6 +65,9 @@ export default function DatasetDetailPage() {
   const [caseTitle, setCaseTitle] = useState("");
   const [caseTags, setCaseTags] = useState("");
   const [turns, setTurns] = useState<EvalTurnInput[]>([blankTurn()]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sampleSize, setSampleSize] = useState(5);
+  const initializedRef = useRef<string | null>(null);
 
   const datasetQuery = useQuery({
     queryKey: ["eval", "dataset", datasetId],
@@ -125,9 +128,12 @@ export default function DatasetDetailPage() {
         { method: "POST", body: JSON.stringify(payload) },
       );
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
       setEditorOpen(false);
       setNotice(editingCase ? "用例已更新" : "用例已创建");
+      if (!editingCase) {
+        setSelected((prev) => new Set(prev).add(saved.id));
+      }
       refresh();
     },
     onError: (err) =>
@@ -149,7 +155,10 @@ export default function DatasetDetailPage() {
     mutationFn: () =>
       apiFetch<EvalRun>(`/eval/datasets/${datasetId}/runs`, {
         method: "POST",
-        body: JSON.stringify({ retrieval_mode: mode }),
+        body: JSON.stringify({
+          retrieval_mode: mode,
+          case_ids: selectedCaseIds,
+        }),
       }),
     onSuccess: (run) => {
       router.push(`/evaluations/runs/${run.id}`);
@@ -159,6 +168,43 @@ export default function DatasetDetailPage() {
   });
 
   const dataset = datasetQuery.data;
+
+  useEffect(() => {
+    if (dataset && initializedRef.current !== dataset.id) {
+      initializedRef.current = dataset.id;
+      setSelected(new Set(dataset.cases.map((item) => item.id)));
+    }
+  }, [dataset]);
+
+  const selectedCaseIds = (dataset?.cases ?? [])
+    .filter((item) => selected.has(item.id))
+    .map((item) => item.id);
+
+  const toggleCase = (caseId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(caseId)) {
+        next.delete(caseId);
+      } else {
+        next.add(caseId);
+      }
+      return next;
+    });
+  };
+
+  const pickRandom = () => {
+    const ids = (dataset?.cases ?? []).map((item) => item.id);
+    for (let index = ids.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [ids[index], ids[swap]] = [ids[swap], ids[index]];
+    }
+    const size = Math.min(
+      Math.max(1, sampleSize),
+      Math.max(ids.length, 1),
+    );
+    setSelected(new Set(ids.slice(0, size)));
+  };
+
   const readyDocuments =
     documentsQuery.data?.items.filter(
       (item) => item.index_status === "ready",
@@ -238,26 +284,6 @@ export default function DatasetDetailPage() {
             <ButtonSecondary onClick={openCreate}>
               新增用例
             </ButtonSecondary>
-            <Select
-              value={mode}
-              className="w-40"
-              onChange={(event) =>
-                setMode(event.target.value as EvalRetrievalMode)
-              }
-            >
-              <option value="question">当前问题检索</option>
-              <option value="rewritten">历史改写检索</option>
-            </Select>
-            <Button
-              disabled={runMutation.isPending || dataset.turn_count === 0}
-              onClick={() => {
-                setError("");
-                setNotice("");
-                runMutation.mutate();
-              }}
-            >
-              {runMutation.isPending ? "启动中..." : "开始运行"}
-            </Button>
           </div>
         }
       />
@@ -273,10 +299,86 @@ export default function DatasetDetailPage() {
         </div>
       ) : null}
 
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-slate-600">
+            运行范围：已选 {selectedCaseIds.length}/
+            {dataset.cases.length} 条用例
+          </span>
+          <Select
+            id="eval-retrieval-mode"
+            name="retrieval_mode"
+            value={mode}
+            className="w-44"
+            onChange={(event) =>
+              setMode(event.target.value as EvalRetrievalMode)
+            }
+          >
+            <option value="question">当前问题检索</option>
+            <option value="rewritten">历史改写检索</option>
+          </Select>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              name="sample_size"
+              min={1}
+              max={Math.max(dataset.cases.length, 1)}
+              value={sampleSize}
+              className="w-20"
+              aria-label="随机抽取条数"
+              onChange={(event) =>
+                setSampleSize(Number(event.target.value) || 1)
+              }
+            />
+            <ButtonSecondary
+              onClick={pickRandom}
+              disabled={dataset.cases.length === 0}
+            >
+              随机抽取
+            </ButtonSecondary>
+          </div>
+          <Button
+            disabled={
+              runMutation.isPending || selectedCaseIds.length === 0
+            }
+            onClick={() => {
+              setError("");
+              setNotice("");
+              runMutation.mutate();
+            }}
+          >
+            {runMutation.isPending
+              ? "启动中..."
+              : `开始运行（${selectedCaseIds.length}）`}
+          </Button>
+        </div>
+      </Card>
+
       <section className="mb-8">
-        <h2 className="mb-3 text-lg font-semibold text-slate-900">
-          用例（{dataset.cases.length}）
-        </h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-slate-900">
+            用例（{dataset.cases.length}）
+          </h2>
+          <div className="flex items-center gap-3 text-sm text-slate-500">
+            <span>
+              已选 {selectedCaseIds.length}/{dataset.cases.length}
+            </span>
+            <button
+              className="text-slate-600 hover:underline"
+              onClick={() =>
+                setSelected(new Set(dataset.cases.map((item) => item.id)))
+              }
+            >
+              全选
+            </button>
+            <button
+              className="text-slate-600 hover:underline"
+              onClick={() => setSelected(new Set())}
+            >
+              清空
+            </button>
+          </div>
+        </div>
         {dataset.cases.length === 0 ? (
           <EmptyState
             title="还没有用例"
@@ -287,23 +389,33 @@ export default function DatasetDetailPage() {
             {dataset.cases.map((item) => (
               <Card key={item.id}>
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-medium text-slate-900">
-                        {item.title}
-                      </h3>
-                      {item.tags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          className="bg-slate-100 text-slate-600"
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      name={`select-case-${item.id}`}
+                      checked={selected.has(item.id)}
+                      onChange={() => toggleCase(item.id)}
+                      aria-label={`选择用例 ${item.title}`}
+                    />
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium text-slate-900">
+                          {item.title}
+                        </h3>
+                        {item.tags.map((tag) => (
+                          <Badge
+                            key={tag}
+                            className="bg-slate-100 text-slate-600"
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.turns.length} 个轮次
+                      </p>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {item.turns.length} 个轮次
-                    </p>
                   </div>
                   <div className="flex gap-3 text-sm">
                     <button
@@ -332,24 +444,33 @@ export default function DatasetDetailPage() {
                       key={turn.id}
                       className="rounded-md bg-slate-50 px-3 py-2 text-sm"
                     >
-                      <div className="flex items-center gap-2 text-xs text-slate-500">
-                        <span>第 {turn.turn_index} 轮</span>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="shrink-0">
+                          第 {turn.turn_index} 轮
+                        </span>
                         <Badge
                           className={
                             turn.expected_type === "answerable"
-                              ? "bg-blue-50 text-blue-700"
-                              : "bg-amber-50 text-amber-700"
+                              ? "shrink-0 bg-blue-50 text-blue-700"
+                              : "shrink-0 bg-amber-50 text-amber-700"
                           }
                         >
                           {turn.expected_type === "answerable"
                             ? "可回答"
                             : "应拒答"}
                         </Badge>
-                        {turn.required_documents.map((document) => (
-                          <span key={document.id}>
-                            《{document.title}》
+                        {turn.required_documents
+                          .slice(0, 3)
+                          .map((document, index) => (
+                            <span key={`${document.id}-${index}`}>
+                              《{document.title}》
+                            </span>
+                          ))}
+                        {turn.required_documents.length > 3 ? (
+                          <span className="shrink-0">
+                            等 {turn.required_documents.length} 篇
                           </span>
-                        ))}
+                        ) : null}
                       </div>
                       <p className="mt-1 text-slate-800">
                         {turn.question}

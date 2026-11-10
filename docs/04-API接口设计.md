@@ -60,7 +60,11 @@
 | 文档 | PUT | `/documents/{id}` | 登录用户（员工待审、领导直接） |
 | 文档 | DELETE | `/documents/{id}` | 登录用户（员工待审、领导直接） |
 | 文档 | POST | `/documents/{id}/reindex` | 领导 |
+| 文档 | POST | `/documents/batch-delete` | 登录用户 |
+| 文档 | GET | `/documents/trash` | 领导 |
+| 文档 | POST | `/documents/trash/restore`、`/documents/trash/purge` | 领导 |
 | 文档审批 | GET | `/document-changes` | 领导全部；员工仅自己 |
+| 文档审批 | POST | `/document-changes/batch-approve`、`/batch-reject` | 领导 |
 | 文档审批 | GET | `/document-changes/{id}` | 领导或申请人 |
 | 文档审批 | POST | `/document-changes/{id}/approve` | 领导 |
 | 文档审批 | POST | `/document-changes/{id}/reject` | 领导 |
@@ -403,11 +407,11 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 
 行为：
 
-- **领导**：软删除文档（从列表隐藏），清理分块和 MinIO 对象，返回 `200 { mode: "direct" }`。
+- **领导**：移入回收站（从列表和检索隐藏），**保留分块和 MinIO 对象**，返回 `200 { mode: "direct" }`。
 - **员工**：创建 `document_changes`（`action=delete`, `status=pending`），返回 `202 { mode: "pending_approval", change }`。
 - 若该文档已有待审批变更：`409 DOC_CHANGE_ALREADY_PENDING`。
 
-> 删除采用软删除，保留 `documents` 行和变更历史；文档列表和检索会过滤已删除文档。
+> 删除采用软删除，保留 `documents` 行和变更历史；文档列表和检索会过滤已删除文档。进入回收站的文档可通过回收站接口恢复，彻底删除才会清理分块与对象。
 
 ### 6.7 重新索引文档
 
@@ -423,6 +427,58 @@ data: {"code":"LLM_UNAVAILABLE","message":"生成服务暂时不可用"}
 ```
 
 用于索引失败或需要重新解析切分。员工调用返回 `403 AUTH_FORBIDDEN`。
+
+### 6.8 批量删除
+
+`POST /api/v1/documents/batch-delete`
+
+```json
+{ "ids": ["UUID", "UUID"] }
+```
+
+- 单次最多 100 个 ID；逐条处理，跳过项返回原因，不整批失败；
+- 领导：直接移入回收站，`mode=direct`；
+- 员工：逐条生成待审批变更，`mode=pending_approval`；
+- 跳过原因：文档不存在、已在回收站、已有待审批变更。
+
+响应：
+
+```json
+{
+  "mode": "direct",
+  "deleted": [{"id": "UUID", "title": "RGB-1"}],
+  "submitted": [],
+  "skipped": [{"id": "UUID", "title": "员工手册", "reason": "该文档已有待审批变更"}]
+}
+```
+
+### 6.9 回收站
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/documents/trash?keyword=&page=&page_size=` | 领导 | 已删除且未彻底删除的文档，按删除时间倒序 |
+| POST | `/documents/trash/restore` | 领导 | body `{ids}`，恢复文档，分块与对象保留，恢复后立即可检索 |
+| POST | `/documents/trash/purge` | 领导 | body `{ids}`，彻底删除：清理分块与 MinIO 对象，不可恢复 |
+
+响应统一为：
+
+```json
+{
+  "processed": [{"id": "UUID", "title": "RGB-1"}],
+  "skipped": [{"id": "UUID", "title": "员工手册", "reason": "文档不在回收站"}]
+}
+```
+
+回收站列表项在文档对象基础上增加 `deleted_at`。
+
+### 6.10 批量审批
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/document-changes/batch-approve` | body `{ids, comment?}`，仅处理 `pending` 变更 |
+| POST | `/document-changes/batch-reject` | body `{ids, comment}`，`comment` 必填，整批共用 |
+
+响应同样为 `{processed, skipped}`；`approve` 删除类变更会把文档移入回收站。
 
 ## 7. 文档审批接口
 
@@ -846,7 +902,7 @@ JSONL 格式：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/eval/datasets/{id}/runs` | 启动运行，body `{retrieval_mode: "question"｜"rewritten"}`；同数据集已有运行中返回 `409 EVAL_RUN_IN_PROGRESS` |
+| POST | `/eval/datasets/{id}/runs` | 启动运行，body `{retrieval_mode: "question"｜"rewritten", case_ids?: ["UUID"]}`；省略 `case_ids` 表示全部用例，传空数组返回 `422 EVAL_CASE_INVALID`；同数据集已有运行中返回 `409 EVAL_RUN_IN_PROGRESS` |
 | GET | `/eval/runs?dataset_id=&limit=` | 运行列表 |
 | GET | `/eval/runs/{id}` | 运行详情与汇总指标 |
 | GET | `/eval/runs/{id}/items?status=&page=&page_size=` | 逐轮结果 |

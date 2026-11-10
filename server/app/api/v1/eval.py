@@ -193,7 +193,11 @@ async def create_run(
     user: User = Depends(require_evaluator),
 ) -> RunOut:
     return await eval_service.create_run(
-        db, user, dataset_id, payload.retrieval_mode
+        db,
+        user,
+        dataset_id,
+        payload.retrieval_mode,
+        payload.case_ids,
     )
 
 
