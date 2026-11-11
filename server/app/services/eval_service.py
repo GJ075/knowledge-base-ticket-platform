@@ -31,8 +31,31 @@ from app.schemas.eval import (
     TurnIn,
     TurnOut,
 )
+from app.services.retrieval import RetrievalConfig
 
 MAX_TURNS = 5
+
+
+def _merge_retrieval_config(override: dict | None) -> dict:
+    base = RetrievalConfig.from_settings().to_dict()
+    if not override:
+        return base
+    merged = dict(base)
+    for key, value in override.items():
+        if key not in base:
+            continue
+        default = base[key]
+        if isinstance(default, bool):
+            merged[key] = str(value).lower() in {"1", "true", "yes"}
+            continue
+        try:
+            merged[key] = type(default)(value)
+        except (TypeError, ValueError):
+            continue
+    try:
+        return RetrievalConfig(**merged).to_dict()
+    except ValueError as exc:
+        raise AppError("VALIDATION_ERROR", str(exc), 422) from exc
 
 
 def _validate_turn_shape(payload: TurnIn) -> None:
@@ -661,6 +684,7 @@ def _run_out(run: EvalRun, dataset_name: str, creator: str) -> RunOut:
         total_items=run.total_items,
         completed_items=run.completed_items,
         metrics=run.metrics,
+        retrieval_config=run.retrieval_config,
         error=run.error,
         created_by=creator,
         started_at=run.started_at,
@@ -686,6 +710,7 @@ async def create_run(
     dataset_id: uuid.UUID,
     retrieval_mode: str,
     case_ids: list[uuid.UUID] | None = None,
+    retrieval_config: dict | None = None,
 ) -> RunOut:
     dataset = await _get_dataset(db, dataset_id)
     running = (
@@ -746,6 +771,7 @@ async def create_run(
         status="pending",
         created_by=user.id,
         total_items=len(items),
+        retrieval_config=_merge_retrieval_config(retrieval_config),
     )
     db.add(run)
     await db.flush()
