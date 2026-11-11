@@ -25,7 +25,22 @@ async def ready() -> JSONResponse:
     try:
         async with SessionLocal() as db:
             await db.execute(text("SELECT 1"))
+            missing_tsv = (
+                await db.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks c "
+                        "JOIN documents d ON d.id = c.document_id "
+                        "WHERE d.is_deleted = false AND c.content_tsv IS NULL"
+                    )
+                )
+            ).scalar_one()
         components["database"] = "ok"
+        if missing_tsv:
+            components["fts"] = f"degraded: {missing_tsv} chunks missing tsv"
+            if settings.hybrid_enabled:
+                ok = False
+        else:
+            components["fts"] = "ok"
     except Exception as exc:
         components["database"] = f"error: {exc}"
         ok = False
