@@ -30,6 +30,37 @@ import {
   formatPercent,
 } from "@/lib/utils";
 
+const CONFIG_KEYS = [
+  "hybrid_enabled",
+  "rerank_enabled",
+  "rewrite_enabled",
+  "candidate_k",
+  "final_k",
+  "rerank_threshold",
+  "context_token_budget",
+];
+
+function formatRetrievalConfig(
+  config?: Record<string, unknown> | null,
+): string {
+  if (!config) return "未记录";
+  return CONFIG_KEYS.filter((key) => config[key] !== undefined)
+    .map((key) => `${key}=${String(config[key])}`)
+    .join(" · ");
+}
+
+function formatConfigShort(
+  config?: Record<string, unknown> | null,
+): string {
+  if (!config) return "默认";
+  const flags = [
+    config.hybrid_enabled ? "混合" : null,
+    config.rerank_enabled ? "精排" : null,
+    config.rewrite_enabled ? "改写" : null,
+  ].filter(Boolean);
+  return flags.length ? flags.join("+") : "稠密";
+}
+
 const ITEM_STATUS_STYLE: Record<string, string> = {
   passed: "bg-emerald-50 text-emerald-700",
   failed: "bg-red-50 text-red-700",
@@ -186,6 +217,14 @@ export default function RunDetailPage() {
         }
       />
 
+      {run.retrieval_config ? (
+        <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-600">
+          <span className="rounded-md bg-slate-100 px-2 py-1">
+            检索配置：{formatRetrievalConfig(run.retrieval_config)}
+          </span>
+        </div>
+      ) : null}
+
       {notice ? (
         <p className="mb-4 rounded-md bg-slate-100 px-4 py-2 text-sm text-slate-700">
           {notice}
@@ -256,6 +295,7 @@ export default function RunDetailPage() {
                 <option key={item.id} value={item.id}>
                   {formatDate(item.created_at)} ·{" "}
                   {EVAL_MODE_LABEL[item.retrieval_mode]} ·{" "}
+                  {formatConfigShort(item.retrieval_config)} ·{" "}
                   {EVAL_RUN_STATUS_LABEL[item.status]}
                 </option>
               ))}
@@ -273,6 +313,14 @@ export default function RunDetailPage() {
           ) : null}
           {compareQuery.data ? (
             <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap gap-4 text-xs text-slate-600">
+                <span>
+                  当前：{formatRetrievalConfig(compareQuery.data.current.retrieval_config)}
+                </span>
+                <span>
+                  基线：{formatRetrievalConfig(compareQuery.data.baseline.retrieval_config)}
+                </span>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left text-xs uppercase text-slate-500">

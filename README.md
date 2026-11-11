@@ -167,8 +167,15 @@ docker compose exec api python -m scripts.seed
 |---|---|---|
 | `LLM_PROVIDER` | `auto` | `auto` / `deepseek` / `mock` |
 | `CONVERSATION_HISTORY_TURNS` | 5 | 多轮上下文保留轮数 |
-| `TOP_K` | 5 | 每次检索片段数 |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 800 / 100 | 固定长度切分 |
+| `TOP_K` | 5 | 兼容保留，实际使用 `FINAL_K` |
+| `CHUNK_TARGET` / `CHUNK_MAX` / `CHUNK_MIN` | 450 / 700 / 150 | 结构化切分的目标、上限、下限字符数 |
+| `CHUNK_OVERLAP` | 60 | 段内句级切分重叠字符数 |
+| `CANDIDATE_K` / `FUSED_K` / `FINAL_K` | 30 / 40 / 5 | 双路召回数、融合后候选数、最终引用数 |
+| `HYBRID_ENABLED` | `true` | 稠密 + 关键词混合检索（RRF 融合） |
+| `RERANK_ENABLED` / `RERANK_TOP_N` | `false` / 40 | 精排开关与精排候选数（CPU 环境建议关闭） |
+| `RERANK_THRESHOLD` | `0` | 精排分数阈值；实测当前语料不适用，保持 0 |
+| `REWRITE_ENABLED` | `true` | 多轮指代问题的检索改写 |
+| `RERANK_TIMEOUT_SECONDS` | 30 | 精排超时，超时自动回退到融合排序 |
 | `MAX_UPLOAD_MB` | 50 | 单文件上限 |
 | `EMBEDDING_DEVICE` | `cpu` | 可改 `cuda`（需 GPU 镜像） |
 | `COOKIE_SECURE` | `false` | 本机 HTTP 保持 false；HTTPS 部署时改 true |

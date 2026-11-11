@@ -1,4 +1,3 @@
-import re
 from io import BytesIO
 from pathlib import Path
 
@@ -60,32 +59,3 @@ def parse_document(filename: str, data: bytes) -> str:
     if not text:
         raise ValueError("文档没有可提取的文本")
     return text
-
-
-def chunk_text(
-    text: str,
-    size: int | None = None,
-    overlap: int | None = None,
-) -> list[str]:
-    settings = get_settings()
-    size = size or settings.chunk_size
-    overlap = overlap if overlap is not None else settings.chunk_overlap
-    overlap = min(max(overlap, 0), max(size // 2, 0))
-
-    normalized = re.sub(r"\s+", " ", sanitize_text(text)).strip()
-    if not normalized:
-        return []
-    if len(normalized) <= size:
-        return [normalized]
-
-    chunks: list[str] = []
-    start = 0
-    while start < len(normalized):
-        end = min(start + size, len(normalized))
-        chunk = normalized[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= len(normalized):
-            break
-        start += size - overlap
-    return chunks

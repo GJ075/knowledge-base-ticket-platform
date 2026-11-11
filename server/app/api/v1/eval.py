@@ -198,6 +198,7 @@ async def create_run(
         dataset_id,
         payload.retrieval_mode,
         payload.case_ids,
+        payload.retrieval_config,
     )
 
 

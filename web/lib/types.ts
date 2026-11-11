@@ -261,6 +261,7 @@ export interface EvalRun {
   total_items: number;
   completed_items: number;
   metrics: Record<string, number | null> | null;
+  retrieval_config: Record<string, unknown> | null;
   error: string | null;
   created_by: string;
   started_at: string | null;

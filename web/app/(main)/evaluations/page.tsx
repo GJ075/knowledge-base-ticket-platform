@@ -34,6 +34,18 @@ import {
   formatPercent,
 } from "@/lib/utils";
 
+function formatConfigShort(
+  config?: Record<string, unknown> | null,
+): string {
+  if (!config) return "默认";
+  const flags = [
+    config.hybrid_enabled ? "混合" : null,
+    config.rerank_enabled ? "精排" : null,
+    config.rewrite_enabled ? "改写" : null,
+  ].filter(Boolean);
+  return flags.length ? flags.join("+") : "稠密";
+}
+
 export default function EvaluationsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -329,6 +341,7 @@ export default function EvaluationsPage() {
                 <tr>
                   <th className="px-4 py-3">数据集</th>
                   <th className="px-4 py-3">检索模式</th>
+                  <th className="px-4 py-3">检索配置</th>
                   <th className="px-4 py-3">状态</th>
                   <th className="px-4 py-3">进度</th>
                   <th className="px-4 py-3">通过率</th>
@@ -352,6 +365,9 @@ export default function EvaluationsPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {EVAL_MODE_LABEL[run.retrieval_mode]}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {formatConfigShort(run.retrieval_config)}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {EVAL_RUN_STATUS_LABEL[run.status]}

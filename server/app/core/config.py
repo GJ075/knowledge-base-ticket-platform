@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,9 +36,22 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: int = 600
 
     max_upload_mb: int = 50
-    chunk_size: int = 800
-    chunk_overlap: int = 100
+    chunk_target: int = 450
+    chunk_max: int = 700
+    chunk_min: int = 150
+    chunk_overlap: int = 60
     top_k: int = 5
+
+    candidate_k: int = 30
+    fused_k: int = 40
+    final_k: int = 5
+    hybrid_enabled: bool = True
+    rerank_enabled: bool = False
+    rerank_top_n: int = 40
+    rerank_threshold: float = 0.0
+    rewrite_enabled: bool = True
+    context_token_budget: int = 3000
+    rerank_timeout_seconds: float = 30.0
 
     cors_origins: str = "http://localhost:3000"
 
@@ -46,6 +60,15 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def _validate_chunk_window(self) -> "Settings":
+        if not self.chunk_min <= self.chunk_target <= self.chunk_max:
+            raise ValueError(
+                "需满足 CHUNK_MIN <= CHUNK_TARGET <= CHUNK_MAX，"
+                f"当前为 {self.chunk_min} / {self.chunk_target} / {self.chunk_max}"
+            )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

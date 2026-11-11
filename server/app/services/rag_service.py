@@ -10,7 +10,6 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.session import SessionLocal
 from app.models.conversation import Conversation, Message
-from app.models.document import Document, DocumentChunk
 from app.models.user import User
 from app.schemas.chat import (
     Citation,
@@ -19,8 +18,8 @@ from app.schemas.chat import (
     ConversationSummary,
     MessageOut,
 )
-from app.services import llm_client
-from app.services.embedding_client import embed_query
+from app.services import eval_judge, llm_client, retrieval
+from app.services.retrieval import RetrievalConfig, Retrieved
 
 settings = get_settings()
 
@@ -198,41 +197,12 @@ async def _load_history(
     ]
 
 
-async def _search_chunks(
-    db: AsyncSession,
-    vector: list[float],
-    top_k: int,
-):
-    return (
-        await db.execute(
-            select(DocumentChunk, Document)
-            .join(Document, Document.id == DocumentChunk.document_id)
-            .where(Document.is_deleted.is_(False))
-            .order_by(DocumentChunk.embedding.cosine_distance(vector))
-            .limit(top_k)
-        )
-    ).all()
+def _citations(items: list[Retrieved]) -> list[dict]:
+    return [retrieval.to_citation(item) for item in items]
 
 
-def _citations(rows) -> list[dict]:
-    return [
-        {
-            "document_id": str(document.id),
-            "document_title": document.title,
-            "chunk_index": chunk.chunk_index,
-            "snippet": chunk.content[:300],
-        }
-        for chunk, document in rows
-    ]
-
-
-def _context(rows) -> str:
-    lines = []
-    for index, (chunk, document) in enumerate(rows, start=1):
-        lines.append(
-            f"[{index}] 文档《{document.title}》片段：{chunk.content}"
-        )
-    return "\n".join(lines)
+def _context(items: list[Retrieved]) -> str:
+    return retrieval.build_context(items)
 
 
 def _build_messages(
@@ -300,8 +270,16 @@ async def stream_chat(
             history = await _load_history(
                 db, conversation_id, user_message_id
             )
+            config = RetrievalConfig.from_settings()
+            search_query = question
+            if config.rewrite_enabled and history:
+                rewritten = await eval_judge.rewrite_question(
+                    history, question
+                )
+                if rewritten:
+                    search_query = rewritten
             try:
-                vector = await embed_query(question)
+                items = await retrieval.search(db, search_query, config)
             except Exception:
                 yield sse(
                     "error",
@@ -311,11 +289,14 @@ async def stream_chat(
                     },
                 )
                 return
-            rows = await _search_chunks(db, vector, settings.top_k)
-            citations = _citations(rows)
-            context = _context(rows)
+            items = retrieval.merge_adjacent(items)
+            items = retrieval.within_budget(
+                items, config.context_token_budget
+            )
+            citations = _citations(items)
+            context = _context(items)
 
-        if not rows:
+        if not items:
             async for chunk in _stream_refusal(conversation_id):
                 yield chunk
             return

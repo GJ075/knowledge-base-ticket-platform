@@ -14,6 +14,8 @@ class Citation(BaseModel):
     document_title: str
     chunk_index: int
     snippet: str
+    heading_path: list[str] | None = None
+    score: float | None = None
 
 
 class MessageOut(BaseModel):

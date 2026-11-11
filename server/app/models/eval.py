@@ -181,6 +181,7 @@ class EvalRun(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    retrieval_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"

@@ -91,6 +91,7 @@ class DatasetDetail(DatasetSummary):
 class RunCreate(BaseModel):
     retrieval_mode: Literal["question", "rewritten"] = "question"
     case_ids: list[uuid.UUID] | None = None
+    retrieval_config: dict | None = None
 
 
 class RunOut(BaseModel):
@@ -103,6 +104,7 @@ class RunOut(BaseModel):
     total_items: int
     completed_items: int
     metrics: dict | None
+    retrieval_config: dict | None = None
     error: str | None
     created_by: str
     started_at: datetime | None

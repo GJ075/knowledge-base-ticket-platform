@@ -35,3 +35,17 @@ def embed_texts_sync(texts: list[str]) -> list[list[float]]:
             response.raise_for_status()
             results.extend(response.json()["embeddings"])
     return results
+
+
+async def rerank_pairs(query: str, passages: list[str]) -> list[float]:
+    if not passages:
+        return []
+    async with httpx.AsyncClient(
+        timeout=settings.rerank_timeout_seconds
+    ) as client:
+        response = await client.post(
+            f"{settings.embedding_service_url}/rerank",
+            json={"query": query, "passages": passages},
+        )
+        response.raise_for_status()
+        return response.json()["scores"]

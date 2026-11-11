@@ -15,8 +15,9 @@ from app.core.config import get_settings
 from app.models.document import Document
 from app.models.eval import EvalRun, EvalRunItem
 from app.services import eval_judge, llm_client
-from app.services.embedding_client import embed_query
-from app.services.rag_service import _build_messages, _context, _search_chunks
+from app.services import retrieval
+from app.services.rag_service import _build_messages
+from app.services.retrieval import RetrievalConfig
 
 logger = logging.getLogger("app")
 settings = get_settings()
@@ -70,6 +71,7 @@ async def _execute_item(
     item: EvalRunItem,
     retrieval_mode: str,
     history: list[dict],
+    config: RetrievalConfig,
 ) -> dict:
     question = item.question
     retrieval_query = question
@@ -78,19 +80,12 @@ async def _execute_item(
         if rewritten:
             retrieval_query = rewritten
 
-    vector = await embed_query(retrieval_query)
-    rows = await _search_chunks(db, vector, settings.top_k)
-    retrieved = [
-        {
-            "document_id": str(document.id),
-            "document_title": document.title,
-            "chunk_index": chunk.chunk_index,
-            "snippet": chunk.content[:300],
-        }
-        for chunk, document in rows
-    ]
+    items = await retrieval.search(db, retrieval_query, config)
+    items = retrieval.merge_adjacent(items)
+    items = retrieval.within_budget(items, config.context_token_budget)
+    retrieved = [retrieval.to_citation(entry) for entry in items]
     citations = list(retrieved)
-    context = _context(rows)
+    context = retrieval.build_context(items)
     answer = await _generate_answer(history, question, context, citations)
 
     required = [str(doc_id) for doc_id in (item.required_document_ids or [])]
@@ -277,6 +272,12 @@ async def run_evaluation(run_id: str) -> None:
             run.started_at = datetime.now(timezone.utc)
             await db.commit()
 
+            config = RetrievalConfig.from_settings()
+            if run.retrieval_config:
+                config = RetrievalConfig(
+                    **{**config.to_dict(), **run.retrieval_config}
+                )
+
             items = (
                 await db.execute(
                     select(EvalRunItem)
@@ -319,7 +320,7 @@ async def run_evaluation(run_id: str) -> None:
                 )
                 try:
                     result = await _execute_item(
-                        db, item, run.retrieval_mode, history
+                        db, item, run.retrieval_mode, history, config
                     )
                     for key, value in result.items():
                         setattr(item, key, value)

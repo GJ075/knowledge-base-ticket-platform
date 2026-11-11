@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -11,9 +11,12 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.models.document import Document, DocumentChunk
-from app.services.document_parser import chunk_text, parse_document
+from app.services.chunking import structure_chunks
+from app.services.document_metadata import extract_metadata
+from app.services.document_parser import parse_document
 from app.services.embedding_client import embed_texts_sync
 from app.services.storage import get_bytes_async, remove_object_async
+from app.services.text_index import segment_for_index
 from app.tasks.celery_app import celery_app
 
 settings = get_settings()
@@ -45,11 +48,17 @@ async def run_index_document(
                 settings.minio_document_bucket, document.object_key
             )
             text = parse_document(document.filename, data)
-            chunks = chunk_text(text)
+            for field, value in extract_metadata(document.title, text).items():
+                if not getattr(document, field, None):
+                    setattr(document, field, value)
+
+            chunks = structure_chunks(text)
             if not chunks:
                 raise ValueError("文档没有可索引的分块")
 
-            vectors = await asyncio.to_thread(embed_texts_sync, chunks)
+            vectors = await asyncio.to_thread(
+                embed_texts_sync, [chunk.content for chunk in chunks]
+            )
             if len(vectors) != len(chunks):
                 raise ValueError(
                     "embedding 返回数量与分块数量不一致"
@@ -65,10 +74,18 @@ async def run_index_document(
                     DocumentChunk(
                         document_id=document_uuid,
                         chunk_index=index,
-                        content=content,
+                        content=chunk.content,
+                        heading_path=chunk.heading_path,
+                        unit_type=chunk.unit_type,
+                        char_count=chunk.char_count,
+                        token_count=chunk.token_count,
+                        content_hash=chunk.content_hash,
+                        content_tsv=func.to_tsvector(
+                            "simple", segment_for_index(chunk.content)
+                        ),
                         embedding=vector,
                     )
-                    for index, (content, vector) in enumerate(
+                    for index, (chunk, vector) in enumerate(
                         zip(chunks, vectors)
                     )
                 ]
