@@ -22,3 +22,7 @@ tools/data/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# 本地个人资料与编辑器配置
+.vscode/
+项目全解手册*.html
