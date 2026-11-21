@@ -40,6 +40,7 @@ class RetrievalConfig:
     rerank_enabled: bool = False
     rerank_top_n: int = 40
     rerank_threshold: float = 0.0
+    rerank_delta: float = 0.0
     rewrite_enabled: bool = False
     context_token_budget: int = 3000
 
@@ -54,8 +55,14 @@ class RetrievalConfig:
             raise ValueError("rerank_top_n 不能小于 final_k")
         if not 0.0 <= self.rerank_threshold <= 1.0:
             raise ValueError("rerank_threshold 必须在 [0, 1] 之间")
-        if self.rerank_threshold > 0 and not self.rerank_enabled:
-            raise ValueError("设置 rerank_threshold 前必须启用 rerank_enabled")
+        if not 0.0 <= self.rerank_delta <= 1.0:
+            raise ValueError("rerank_delta 必须在 [0, 1] 之间")
+        if (
+            self.rerank_threshold > 0 or self.rerank_delta > 0
+        ) and not self.rerank_enabled:
+            raise ValueError(
+                "设置 rerank_threshold / rerank_delta 前必须启用 rerank_enabled"
+            )
         if self.context_token_budget < 500:
             raise ValueError("context_token_budget 不能小于 500")
 
@@ -70,6 +77,7 @@ class RetrievalConfig:
             rerank_enabled=settings.rerank_enabled,
             rerank_top_n=settings.rerank_top_n,
             rerank_threshold=settings.rerank_threshold,
+            rerank_delta=settings.rerank_delta,
             rewrite_enabled=settings.rewrite_enabled,
             context_token_budget=settings.context_token_budget,
         )
@@ -93,6 +101,14 @@ class Retrieved:
     @property
     def key(self) -> int:
         return self.chunk_id
+
+
+@dataclass
+class RetrievalResult:
+    items: list[Retrieved]
+    rerank_ok: bool = True
+    degraded: bool = False
+    candidate_count: int = 0
 
 
 def _to_item(
@@ -240,7 +256,7 @@ async def search(
     query: str,
     config: RetrievalConfig | None = None,
     source: str = "internal",
-) -> list[Retrieved]:
+) -> RetrievalResult:
     config = config or RetrievalConfig.from_settings()
 
     vector = await embed_query(query)
@@ -253,52 +269,77 @@ async def search(
             )
             candidates = fuse_rrf([candidates, sparse])[: config.fused_k]
         except Exception:
+            logger.warning(
+                "sparse recall failed, dense only", exc_info=True
+            )
             candidates = candidates[: config.fused_k]
     else:
         candidates = candidates[: config.fused_k]
 
     candidates = dedupe(candidates)
     if not candidates:
-        return []
+        return RetrievalResult(items=[], candidate_count=0)
 
+    rerank_ok = True
+    degraded = False
     if config.rerank_enabled:
-        candidates = await _rerank(query, candidates, config)
+        candidates, rerank_ok = await _rerank(query, candidates, config)
+        degraded = not rerank_ok
 
-    if config.rerank_threshold > 0:
-        candidates = [
-            item
-            for item in candidates
-            if item.score >= config.rerank_threshold
-        ]
+    if config.rerank_enabled and rerank_ok:
+        candidates = filter_by_relevance(candidates, config)
 
-    return candidates[: config.final_k]
+    return RetrievalResult(
+        items=candidates[: config.final_k],
+        rerank_ok=rerank_ok,
+        degraded=degraded,
+        candidate_count=len(candidates),
+    )
+
+
+def filter_by_relevance(
+    items: list[Retrieved], config: RetrievalConfig
+) -> list[Retrieved]:
+    """Keep items above the absolute threshold and within top1 - delta."""
+    if not items:
+        return []
+    floor = items[0].score - config.rerank_delta
+    return [
+        item
+        for item in items
+        if item.score >= config.rerank_threshold and item.score >= floor
+    ]
 
 
 async def _rerank(
     query: str,
     candidates: list[Retrieved],
     config: RetrievalConfig,
-) -> list[Retrieved]:
+) -> tuple[list[Retrieved], bool]:
     pool = candidates[: config.rerank_top_n]
     try:
         scores = await rerank_pairs(
-            query, [item.content for item in pool]
+            query,
+            [
+                f"《{item.document.title}》\n{item.content}"
+                for item in pool
+            ],
         )
     except Exception:
         logger.warning("rerank failed, falling back to fused order", exc_info=True)
-        return candidates
+        return candidates, False
     if len(scores) != len(pool):
         logger.warning(
             "rerank returned %d scores for %d passages", len(scores), len(pool)
         )
-        return candidates
+        return candidates, False
     for item, score in zip(pool, scores):
         item.score = float(score)
         item.origin = Origin.RERANK
-    return sorted(pool, key=lambda item: item.score, reverse=True)
+    return sorted(pool, key=lambda item: item.score, reverse=True), True
 
 
-def to_citation(item: Retrieved) -> dict:
+def to_citation(item: Retrieved, index: int | None = None) -> dict:
     return {
         "document_id": str(item.document.id),
         "document_title": item.document.title,
@@ -306,7 +347,10 @@ def to_citation(item: Retrieved) -> dict:
         "heading_path": item.heading_path or [],
         "snippet": item.content[:300],
         "score": round(item.score, 6),
-        "origin": str(item.origin),
+        "origin": item.origin.value
+        if isinstance(item.origin, Origin)
+        else str(item.origin),
+        "index": index,
     }
 
 

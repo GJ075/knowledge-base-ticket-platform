@@ -46,12 +46,14 @@ class Settings(BaseSettings):
     fused_k: int = 40
     final_k: int = 5
     hybrid_enabled: bool = True
-    rerank_enabled: bool = False
+    rerank_enabled: bool = True
     rerank_top_n: int = 40
-    rerank_threshold: float = 0.0
+    rerank_threshold: float = 0.3
+    rerank_delta: float = 0.15
     rewrite_enabled: bool = True
     context_token_budget: int = 3000
     rerank_timeout_seconds: float = 30.0
+    citation_required: bool = True
 
     cors_origins: str = "http://localhost:3000"
 
