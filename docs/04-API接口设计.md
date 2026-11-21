@@ -52,6 +52,7 @@
 | 会话 | GET | `/conversations` | 登录用户（仅自己） |
 | 会话 | GET | `/conversations/{id}` | 登录用户（仅自己） |
 | 会话 | DELETE | `/conversations/{id}` | 登录用户（仅自己） |
+| 会话 | GET | `/conversations/{id}/recitations` | 登录用户（仅自己）；按当前策略重算历史引用的候选 |
 | 问答 | POST | `/chat/stream` | 登录用户 |
 | 文档 | GET | `/documents` | 登录用户 |
 | 文档 | GET | `/documents/{id}` | 登录用户 |
@@ -241,6 +242,25 @@
 
 响应 `204`；级联删除消息。
 
+### 5.3.1 重算历史引用
+
+`GET /api/v1/conversations/{conversation_id}/recitations?limit=10`
+
+旧消息没有内联编号，无法还原“当时实际引用”。该接口按当前检索策略重新检索，返回候选引用，供前端标注「按当前策略重算」展示，不修改已存消息。
+
+```json
+{
+  "items": [
+    {
+      "message_id": "UUID",
+      "mode": "recomputed",
+      "degraded": false,
+      "citations": [{"index": 1, "document_title": "...", "snippet": "..."}]
+    }
+  ]
+}
+```
+
 ### 5.4 流式问答
 
 `POST /api/v1/chat/stream`
@@ -269,17 +289,25 @@ event: meta
 data: {"conversation_id":"UUID","user_message_id":"UUID"}
 
 event: citations
-data: {"items":[{"document_id":"UUID","document_title":"员工手册.pdf","chunk_index":3,"snippet":"..."}]}
+data: {"items":[{"document_id":"UUID","document_title":"员工手册","chunk_index":3,"snippet":"...","heading_path":["员工手册","年假"],"score":0.87,"index":1}],"threshold":0.3,"delta":0.15,"degraded":false}
 
 event: token
-data: {"delta":"根据"}
+data: {"delta":"根据[1]"}
 
 event: token
 data: {"delta":"《员工手册》，"}
 
+event: used_citations
+data: {"items":[{"index":1,"document_title":"员工手册","...":"..."}],"fallback":false,"invalid_refs":0,"degraded":false}
+
 event: done
 data: {"assistant_message_id":"UUID"}
 ```
+
+- `citations`：过滤后的候选片段，生成前发送；
+- `used_citations`：从回答的 `[n]` 标记解析出的实际引用，生成后发送；
+- `fallback=true`：模型未输出有效编号，引用回退为全部候选；
+- `degraded=true`：精排不可用，本次未做阈值过滤。
 
 出错时：
 
@@ -902,7 +930,7 @@ JSONL 格式：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/eval/datasets/{id}/runs` | 启动运行，body `{retrieval_mode: "question"｜"rewritten", case_ids?: ["UUID"]}`；省略 `case_ids` 表示全部用例，传空数组返回 `422 EVAL_CASE_INVALID`；同数据集已有运行中返回 `409 EVAL_RUN_IN_PROGRESS` |
+| POST | `/eval/datasets/{id}/runs` | 启动运行，body `{retrieval_mode: "question"｜"rewritten", case_ids?: ["UUID"], retrieval_config?: {...}}`；省略 `case_ids` 表示全部用例，传空数组返回 `422 EVAL_CASE_INVALID`；`retrieval_config` 覆盖默认检索参数（hybrid/rerank/阈值等），非法组合返回 422；同数据集已有运行中返回 `409 EVAL_RUN_IN_PROGRESS` |
 | GET | `/eval/runs?dataset_id=&limit=` | 运行列表 |
 | GET | `/eval/runs/{id}` | 运行详情与汇总指标 |
 | GET | `/eval/runs/{id}/items?status=&page=&page_size=` | 逐轮结果 |
