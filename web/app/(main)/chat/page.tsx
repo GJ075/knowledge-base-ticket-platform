@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 
+import { AnswerContent } from "@/components/answer-content";
 import { CitationList } from "@/components/citation-list";
 import {
   Button,
@@ -29,6 +30,7 @@ import type {
   ConversationDetail,
   ConversationSummary,
   Paginated,
+  RecitationResponse,
 } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -51,8 +53,13 @@ function ChatPageInner() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
+  const [activeCitation, setActiveCitation] = useState<{
+    messageId: string;
+    index: number;
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const recomputedRef = useRef<string | null>(null);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations"],
@@ -77,8 +84,46 @@ function ChatPageInner() {
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
+      return;
     }
-  }, [conversationId]);
+    const data = conversationQuery.data;
+    if (!data || streaming) {
+      return;
+    }
+    const hasLegacy = data.messages.some(
+      (message) =>
+        message.role === "assistant" && !message.citation_meta,
+    );
+    if (!hasLegacy || recomputedRef.current === conversationId) {
+      return;
+    }
+    recomputedRef.current = conversationId;
+    void apiFetch<RecitationResponse>(
+      `/conversations/${conversationId}/recitations?limit=10`,
+    )
+      .then((result) => {
+        const byMessage = new Map(
+          result.items.map((item) => [item.message_id, item]),
+        );
+        setMessages((previous) =>
+          previous.map((message) => {
+            const hit = byMessage.get(message.id);
+            if (!hit) {
+              return message;
+            }
+            return {
+              ...message,
+              citations: hit.citations,
+              citation_meta: {
+                mode: "recomputed",
+                degraded: hit.degraded,
+              },
+            };
+          }),
+        );
+      })
+      .catch(() => undefined);
+  }, [conversationQuery.data, conversationId, streaming]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,6 +155,15 @@ function ChatPageInner() {
     setError("");
     setMessages([]);
     router.push(`/chat?conversation_id=${id}`);
+  }
+
+  function handleCite(messageId: string, index: number) {
+    setActiveCitation({ messageId, index });
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`citation-${messageId}-${index}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
   }
 
   async function send() {
@@ -165,6 +219,25 @@ function ChatPageInner() {
               const last = next[next.length - 1];
               if (last && last.role === "assistant") {
                 next[next.length - 1] = { ...last, citations };
+              }
+              return next;
+            });
+          },
+          onUsedCitations: (data) => {
+            setMessages((previous) => {
+              const next = [...previous];
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant") {
+                next[next.length - 1] = {
+                  ...last,
+                  citations: data.items,
+                  citation_meta: {
+                    mode: "cited",
+                    fallback: data.fallback,
+                    invalid_refs: data.invalid_refs,
+                    degraded: data.degraded,
+                  },
+                };
               }
               return next;
             });
@@ -309,14 +382,38 @@ function ChatPageInner() {
                     : "max-w-[85%] rounded-lg bg-slate-100 px-4 py-2 text-sm text-slate-800"
                 }
               >
-                <p className="whitespace-pre-wrap">
-                  {message.content ||
-                    (streaming && message.role === "assistant"
-                      ? "..."
-                      : "")}
-                </p>
                 {message.role === "assistant" ? (
-                  <CitationList citations={message.citations} />
+                  <AnswerContent
+                    content={
+                      message.content ||
+                      (streaming ? "..." : "")
+                    }
+                    onCite={(index) =>
+                      handleCite(message.id, index)
+                    }
+                  />
+                ) : (
+                  <p className="whitespace-pre-wrap">
+                    {message.content}
+                  </p>
+                )}
+                {message.role === "assistant" ? (
+                  <CitationList
+                    citations={message.citations}
+                    messageId={message.id}
+                    meta={message.citation_meta}
+                    activeIndex={
+                      activeCitation?.messageId === message.id
+                        ? activeCitation.index
+                        : null
+                    }
+                    onSelect={(index) =>
+                      setActiveCitation({
+                        messageId: message.id,
+                        index,
+                      })
+                    }
+                  />
                 ) : null}
               </div>
             </div>
@@ -340,6 +437,7 @@ function ChatPageInner() {
           >
             <Textarea
               rows={2}
+              name="chat_message"
               className="flex-1 resize-none"
               placeholder="输入问题，Enter 发送，Shift+Enter 换行"
               value={input}

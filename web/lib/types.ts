@@ -97,6 +97,18 @@ export interface Citation {
   document_title: string;
   chunk_index: number;
   snippet: string;
+  heading_path?: string[] | null;
+  score?: number | null;
+  origin?: string | null;
+  index?: number | null;
+}
+
+export interface CitationMeta {
+  mode?: string;
+  fallback?: boolean;
+  invalid_refs?: number;
+  candidate_count?: number;
+  degraded?: boolean;
 }
 
 export interface ChatMessage {
@@ -104,6 +116,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations: Citation[] | null;
+  citation_meta?: CitationMeta | null;
   created_at: string;
 }
 
@@ -120,6 +133,17 @@ export interface ConversationDetail {
   created_at: string;
   updated_at: string;
   messages: ChatMessage[];
+}
+
+export interface RecitationItem {
+  message_id: string;
+  citations: Citation[];
+  mode: string;
+  degraded: boolean;
+}
+
+export interface RecitationResponse {
+  items: RecitationItem[];
 }
 
 export type TicketType =
@@ -300,6 +324,11 @@ export interface EvalRunItem {
   retrieval_rank: number | null;
   citation_hit: boolean | null;
   citation_precision: number | null;
+  used_citation_hit: boolean | null;
+  used_citation_precision: number | null;
+  invalid_refs: number;
+  citation_fallback: boolean;
+  rerank_degraded: boolean;
   passed: boolean | null;
   invalid_reason: string | null;
   error: string | null;

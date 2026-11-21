@@ -10,6 +10,13 @@ interface DoneEvent {
   assistant_message_id: string;
 }
 
+interface UsedCitationsEvent {
+  items: Citation[];
+  fallback: boolean;
+  invalid_refs: number;
+  degraded?: boolean;
+}
+
 interface ErrorEvent {
   code: string;
   message: string;
@@ -18,6 +25,7 @@ interface ErrorEvent {
 interface Callbacks {
   onMeta?: (data: MetaEvent) => void;
   onCitations?: (items: Citation[]) => void;
+  onUsedCitations?: (data: UsedCitationsEvent) => void;
   onToken?: (delta: string) => void;
   onDone?: (data: DoneEvent) => void;
   onError?: (data: ErrorEvent) => void;
@@ -89,6 +97,14 @@ export async function streamChat(
                 break;
               case "citations":
                 callbacks.onCitations?.(data.items ?? []);
+                break;
+              case "used_citations":
+                callbacks.onUsedCitations?.({
+                  items: data.items ?? [],
+                  fallback: Boolean(data.fallback),
+                  invalid_refs: Number(data.invalid_refs ?? 0),
+                  degraded: Boolean(data.degraded),
+                });
                 break;
               case "token":
                 callbacks.onToken?.(data.delta ?? "");
