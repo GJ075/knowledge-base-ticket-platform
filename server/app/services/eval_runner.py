@@ -14,13 +14,15 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.models.document import Document
 from app.models.eval import EvalRun, EvalRunItem
-from app.services import eval_judge, llm_client
-from app.services import retrieval
+from app.services import citations as citation_service
+from app.services import eval_judge, llm_client, retrieval
 from app.services.rag_service import _build_messages
 from app.services.retrieval import RetrievalConfig
 
 logger = logging.getLogger("app")
 settings = get_settings()
+
+REFUSAL_ANSWER = "根据现有知识库，我无法回答这个问题。"
 
 
 async def _invalid_reason(
@@ -80,13 +82,25 @@ async def _execute_item(
         if rewritten:
             retrieval_query = rewritten
 
-    items = await retrieval.search(db, retrieval_query, config)
+    result = await retrieval.search(db, retrieval_query, config)
+    items = result.items
     items = retrieval.merge_adjacent(items)
     items = retrieval.within_budget(items, config.context_token_budget)
-    retrieved = [retrieval.to_citation(entry) for entry in items]
-    citations = list(retrieved)
+    retrieved = [
+        retrieval.to_citation(entry, index)
+        for index, entry in enumerate(items, start=1)
+    ]
     context = retrieval.build_context(items)
-    answer = await _generate_answer(history, question, context, citations)
+    if items:
+        answer = await _generate_answer(history, question, context, retrieved)
+    else:
+        answer = REFUSAL_ANSWER
+    used, citation_meta = citation_service.select_used(
+        items, answer, settings.citation_required
+    )
+    citations = [
+        retrieval.to_citation(entry, index) for index, entry in used
+    ]
 
     required = [str(doc_id) for doc_id in (item.required_document_ids or [])]
     retrieved_ids = [entry["document_id"] for entry in retrieved]
@@ -108,10 +122,19 @@ async def _execute_item(
     citation_hit = None
     citation_precision = None
     if required_set:
-        cited = required_set & set(citation_ids)
+        cited = required_set & set(retrieved_ids)
         citation_hit = bool(cited)
         citation_precision = round(
-            len(cited) / len(citation_ids), 4
+            len(cited) / len(retrieved_ids), 4
+        ) if retrieved_ids else 0.0
+
+    used_citation_hit = None
+    used_citation_precision = None
+    if required_set:
+        used_cited = required_set & set(citation_ids)
+        used_citation_hit = bool(used_cited)
+        used_citation_precision = round(
+            len(used_cited) / len(citation_ids), 4
         ) if citation_ids else 0.0
 
     judge = await eval_judge.judge_turn(
@@ -145,6 +168,11 @@ async def _execute_item(
         "retrieval_rank": retrieval_rank,
         "citation_hit": citation_hit,
         "citation_precision": citation_precision,
+        "used_citation_hit": used_citation_hit,
+        "used_citation_precision": used_citation_precision,
+        "invalid_refs": citation_meta.get("invalid_refs", 0),
+        "citation_fallback": citation_meta.get("fallback", False),
+        "rerank_degraded": result.degraded,
         "passed": passed,
     }
 
@@ -185,6 +213,11 @@ def aggregate_metrics(items: list[EvalRunItem]) -> dict:
         item.citation_precision
         for item in answerable
         if item.citation_precision is not None
+    ]
+    used_precisions = [
+        item.used_citation_precision
+        for item in answerable
+        if item.used_citation_precision is not None
     ]
     rr = [
         1 / item.retrieval_rank
@@ -235,6 +268,23 @@ def aggregate_metrics(items: list[EvalRunItem]) -> dict:
             len(answerable),
         ),
         "answerable_avg_citation_precision": _average(precisions),
+        "answerable_used_citation_hit_rate": _rate(
+            sum(1 for item in answerable if item.used_citation_hit),
+            len(answerable),
+        ),
+        "answerable_avg_used_citation_precision": _average(
+            used_precisions
+        ),
+        "invalid_refs_total": sum(
+            item.invalid_refs or 0 for item in items
+        ),
+        "citation_fallback_rate": _rate(
+            sum(1 for item in evaluated if item.citation_fallback),
+            len(evaluated),
+        ),
+        "rerank_degraded_items": sum(
+            1 for item in items if item.rerank_degraded
+        ),
         "answerable_refused_rate": _rate(
             sum(1 for item in answerable if item.refused), len(answerable)
         ),

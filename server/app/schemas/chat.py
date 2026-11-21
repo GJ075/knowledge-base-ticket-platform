@@ -16,6 +16,8 @@ class Citation(BaseModel):
     snippet: str
     heading_path: list[str] | None = None
     score: float | None = None
+    origin: str | None = None
+    index: int | None = None
 
 
 class MessageOut(BaseModel):
@@ -23,6 +25,7 @@ class MessageOut(BaseModel):
     role: str
     content: str
     citations: list[Citation] | None
+    citation_meta: dict | None = None
     created_at: datetime
 
 
@@ -46,3 +49,14 @@ class ConversationDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     messages: list[MessageOut]
+
+
+class RecitationItem(BaseModel):
+    message_id: uuid.UUID
+    citations: list[Citation]
+    mode: str = "recomputed"
+    degraded: bool = False
+
+
+class RecitationResponse(BaseModel):
+    items: list[RecitationItem]

@@ -18,12 +18,15 @@ from app.schemas.chat import (
     ConversationSummary,
     MessageOut,
 )
+from app.services import citations as citation_service
 from app.services import eval_judge, llm_client, retrieval
 from app.services.retrieval import RetrievalConfig, Retrieved
 
 settings = get_settings()
 
 SYSTEM_PROMPT = """你是企业知识库助手。只能依据下面提供的资料回答；资料不足时，直接回答“根据现有知识库，我无法回答这个问题。”不要编造。回答使用中文。
+
+每条结论后用方括号标注资料编号，例如 [1]、[2]；只能引用下列资料中存在的编号，不要编造编号。
 
 资料：
 {context}
@@ -46,6 +49,7 @@ def _message_out(message: Message) -> MessageOut:
         role=message.role,
         content=message.content,
         citations=citations,
+        citation_meta=message.citation_meta,
         created_at=message.created_at,
     )
 
@@ -145,6 +149,65 @@ async def delete_conversation(
     await db.commit()
 
 
+async def recompute_citations(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    limit: int = 10,
+) -> dict:
+    """Recompute candidate citations for legacy messages without meta.
+
+    Old answers have no inline markers, so true usage cannot be recovered;
+    the returned citations are threshold-filtered candidates labelled as
+    recomputed. Stored messages are not modified.
+    """
+    conversation = await get_conversation(
+        db, user_id, conversation_id
+    )
+    messages = (
+        await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation.id)
+            .order_by(Message.created_at)
+        )
+    ).scalars().all()
+
+    pairs: list[tuple[Message, Message | None]] = []
+    previous_user: Message | None = None
+    for message in messages:
+        if message.role == "user":
+            previous_user = message
+        elif message.role == "assistant" and not message.citation_meta:
+            pairs.append((message, previous_user))
+    pairs = [pair for pair in pairs if pair[1]][-limit:]
+
+    config = RetrievalConfig.from_settings()
+    items: list[dict] = []
+    for assistant, user_message in pairs:
+        try:
+            result = await retrieval.search(
+                db, user_message.content, config
+            )
+        except Exception:
+            continue
+        kept = retrieval.merge_adjacent(result.items)
+        kept = retrieval.within_budget(
+            kept, config.context_token_budget
+        )
+        items.append(
+            {
+                "message_id": str(assistant.id),
+                "mode": "recomputed",
+                "degraded": result.degraded,
+                "citations": [
+                    retrieval.to_citation(item, index)
+                    for index, item in enumerate(kept, start=1)
+                ],
+            }
+        )
+    return {"items": items}
+
+
 async def prepare_chat(
     db: AsyncSession,
     user: User,
@@ -198,7 +261,10 @@ async def _load_history(
 
 
 def _citations(items: list[Retrieved]) -> list[dict]:
-    return [retrieval.to_citation(item) for item in items]
+    return [
+        retrieval.to_citation(item, index)
+        for index, item in enumerate(items, start=1)
+    ]
 
 
 def _context(items: list[Retrieved]) -> str:
@@ -225,6 +291,7 @@ async def _save_assistant(
     conversation_id: uuid.UUID,
     content: str,
     citations: list[dict],
+    meta: dict | None = None,
 ) -> uuid.UUID:
     async with SessionLocal() as db:
         assistant = Message(
@@ -232,6 +299,7 @@ async def _save_assistant(
             role="assistant",
             content=content,
             citations=citations,
+            citation_meta=meta,
         )
         db.add(assistant)
         conversation = await db.get(Conversation, conversation_id)
@@ -245,9 +313,19 @@ async def _stream_refusal(
     conversation_id: uuid.UUID,
 ) -> AsyncGenerator[str, None]:
     answer = "根据现有知识库，我无法回答这个问题。"
+    yield sse("citations", {"items": []})
     for char in answer:
         yield sse("token", {"delta": char})
-    assistant_id = await _save_assistant(conversation_id, answer, [])
+    yield sse(
+        "used_citations",
+        {"items": [], "fallback": False, "invalid_refs": 0},
+    )
+    assistant_id = await _save_assistant(
+        conversation_id,
+        answer,
+        [],
+        {"mode": "empty", "candidate_count": 0, "fallback": False},
+    )
     yield sse("done", {"assistant_message_id": str(assistant_id)})
 
 
@@ -279,7 +357,7 @@ async def stream_chat(
                 if rewritten:
                     search_query = rewritten
             try:
-                items = await retrieval.search(db, search_query, config)
+                result = await retrieval.search(db, search_query, config)
             except Exception:
                 yield sse(
                     "error",
@@ -289,6 +367,7 @@ async def stream_chat(
                     },
                 )
                 return
+            items = result.items
             items = retrieval.merge_adjacent(items)
             items = retrieval.within_budget(
                 items, config.context_token_budget
@@ -301,7 +380,15 @@ async def stream_chat(
                 yield chunk
             return
 
-        yield sse("citations", {"items": citations})
+        yield sse(
+            "citations",
+            {
+                "items": citations,
+                "threshold": config.rerank_threshold,
+                "delta": config.rerank_delta,
+                "degraded": result.degraded,
+            },
+        )
 
         try:
             mode = llm_client.provider()
@@ -333,10 +420,29 @@ async def stream_chat(
             )
             return
 
+        answer = "".join(answer_parts)
+        used, meta = citation_service.select_used(
+            items, answer, settings.citation_required
+        )
+        used_citations = [
+            retrieval.to_citation(item, index)
+            for index, item in used
+        ]
+        meta["degraded"] = result.degraded
+        yield sse(
+            "used_citations",
+            {
+                "items": used_citations,
+                "fallback": meta["fallback"],
+                "invalid_refs": meta["invalid_refs"],
+                "degraded": result.degraded,
+            },
+        )
         assistant_id = await _save_assistant(
             conversation_id,
-            "".join(answer_parts),
-            citations,
+            answer,
+            used_citations,
+            meta,
         )
         yield sse("done", {"assistant_message_id": str(assistant_id)})
     except Exception:

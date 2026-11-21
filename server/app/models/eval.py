@@ -248,6 +248,21 @@ class EvalRunItem(Base):
     citation_precision: Mapped[float | None] = mapped_column(
         Float, nullable=True
     )
+    used_citation_hit: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    used_citation_precision: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    invalid_refs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    citation_fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    rerank_degraded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     invalid_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

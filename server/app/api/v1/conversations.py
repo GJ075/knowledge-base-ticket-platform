@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.chat import (
     ConversationDetail,
     ConversationListResponse,
+    RecitationResponse,
 )
 from app.services import rag_service
 
@@ -35,6 +36,23 @@ async def get_conversation(
 ) -> ConversationDetail:
     return await rag_service.conversation_detail(
         db, user.id, conversation_id
+    )
+
+
+@router.get(
+    "/{conversation_id}/recitations",
+    response_model=RecitationResponse,
+)
+async def recompute_citations(
+    conversation_id: UUID,
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RecitationResponse:
+    return RecitationResponse(
+        **await rag_service.recompute_citations(
+            db, user.id, conversation_id, limit
+        )
     )
 
 

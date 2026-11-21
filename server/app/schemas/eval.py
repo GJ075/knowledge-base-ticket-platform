@@ -140,6 +140,11 @@ class RunItemOut(BaseModel):
     retrieval_rank: int | None
     citation_hit: bool | None
     citation_precision: float | None
+    used_citation_hit: bool | None = None
+    used_citation_precision: float | None = None
+    invalid_refs: int = 0
+    citation_fallback: bool = False
+    rerank_degraded: bool = False
     passed: bool | None
     invalid_reason: str | None
     error: str | None
